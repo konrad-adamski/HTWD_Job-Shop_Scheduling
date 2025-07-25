@@ -1,19 +1,29 @@
 import time
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
-def schedule(job_ops: Dict[str, List[Tuple[int, str, int]]]) -> List[Tuple[str, int, str, int, int, int]]:
+
+def solve(
+        job_ops: Dict[str, List[Tuple[int, str, int]]],
+        job_earliest_starts: Optional[Dict[str, int]] = None) -> List[Tuple[str, int, str, int, int, int]]:
     """
-    Plant Operationen auf Basis eines gegebenen job_ops-Modells nach der FCFS-Heuristik (First Come First Served).
+    Schedules operations based on a given job_ops model using the First-Come First-Served (FCFS) heuristic.
+    Optionally considers earliest start times per job.
 
-    :param job_ops: Dictionary mit Job-ID → Liste von Tupeln (operation_index, machine, duration).
+    :param job_ops: Dictionary with job ID → list of tuples (operation_index, machine, duration).
     :type job_ops: dict[str, list[tuple[int, str, int]]]
-    :return: Liste geplanter Operationen in der Form (job, operation, machine, start, duration, end).
+    :param job_earliest_starts: Optional dictionary with the earliest start time per job.
+                                If None, all jobs are assumed to be available at time 0.
+    :type job_earliest_starts: dict[str, int] or None
+    :return: List of scheduled operations in the form (job, operation, machine, start, duration, end).
     :rtype: list[tuple[str, int, str, int, int, int]]
     """
     start_time = time.time()
 
-    job_ready = {job: 0 for job in job_ops}
+    if job_earliest_starts is None:
+        job_earliest_starts = {job: 0 for job in job_ops}
+
+    job_ready = job_earliest_starts.copy()
     machine_ready = defaultdict(int)
     pointer = {job: 0 for job in job_ops}
     total_ops = sum(len(ops) for ops in job_ops.values())
@@ -22,7 +32,7 @@ def schedule(job_ops: Dict[str, List[Tuple[int, str, int]]]) -> List[Tuple[str, 
 
     while total_ops > 0:
         best = None
-        for job in sorted(job_ops):  # alphabetisch
+        for job in sorted(job_ops):
             p = pointer[job]
             if p >= len(job_ops[job]):
                 continue
@@ -30,7 +40,9 @@ def schedule(job_ops: Dict[str, List[Tuple[int, str, int]]]) -> List[Tuple[str, 
             op, machine, dur = job_ops[job][p]
             earliest = max(job_ready[job], machine_ready[machine])
 
-            if best is None or earliest < best[1] or (earliest == best[1] and job < best[0]):
+            if best is None or earliest < best[1] or (
+                earliest == best[1] and job_earliest_starts[job] < job_earliest_starts[best[0]]
+            ):
                 best = (job, earliest, dur, machine, op)
 
         job, start, dur, machine, op = best
