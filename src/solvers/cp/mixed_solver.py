@@ -27,7 +27,7 @@ def solve_jssp_lateness_with_start_deviation(
     - Penalties for starting jobs too early (based on deadlines and buffer).
     - Respect of already executed operations (blocking machine times and job continuation).
 
-    :param job_ops: Dictionary mapping each job ID to a list of operations.
+    :param job_ops: Dictionary mapping each job to a list of operations.
                     Each operation is a tuple (operation_id, machine, duration).
     :type job_ops: Dict[str, List[Tuple[int, str, int]]]
 
