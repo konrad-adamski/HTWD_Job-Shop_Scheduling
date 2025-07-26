@@ -56,7 +56,7 @@ def solve_jssp_lateness_with_start_deviation(
     :type latest_start_buffer: int
 
     :param schedule_start: Start of the rescheduling time window.
-    :type schedule_start: float
+    :type schedule_start: int
 
     :param msg: If True, logs solver search progress.
     :type msg: bool
@@ -67,8 +67,8 @@ def solve_jssp_lateness_with_start_deviation(
     :param gapRel: Acceptable relative optimality gap.
     :type gapRel: float
 
-    :return: Final schedule as a list of (job, operation_id, machine, start_time, duration, end_time).
-    :rtype: pd.DataFrame
+    :return: resulting schedule as a list of (job, operation_id, machine, start_time, duration, end_time).
+    :rtype: List[Tuple[str, int, str, int, int, int]]
     """
 
     # 1. === Modellinitialisierung und Gewichtsanpassung ===
@@ -109,9 +109,9 @@ def solve_jssp_lateness_with_start_deviation(
     for _, job, op_idx, _, _, _ in operations:
         last_op_index[job] = max(op_idx, last_op_index.get(job, -1))
 
-    weighted_absolute_lateness_terms = []     # Tardiness + Earliness
-    deviation_terms = []    # Abweichung vom vorherigen Schedule
-    first_op_terms = []     # Earliness-ähnlicher Teilziel für erste Operation je Job
+    weighted_absolute_lateness_terms = []   # List of Job Lateness Terms (Tardiness + Earliness for last operations)
+    first_op_terms = []                     # List of 'First Earliness' Terms for First Operations of Jobs
+    deviation_terms = []                    # List of Deviation Penalty Terms (Difference from previous start times)
 
 
     # 5. === Vorheriger Schedule: Startzeiten für Deviation-Strafterm ===
