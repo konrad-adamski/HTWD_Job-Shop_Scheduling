@@ -52,7 +52,10 @@ def solve_jssp_lateness_with_start_deviation(
     :param main_pct: Fraction of weight assigned to the lateness objective (0.0 to 1.0).
     :type main_pct: float
 
-    :param latest_start_buffer: Buffer in minutes subtracted from the deadline for early start penalty.
+    :param latest_start_buffer: This defines a relaxed latest-start target for first operations:
+        (deadline - total job duration - buffer). Without the buffer, the target would be strict and might slow down
+        the solver due to reduced flexibility in start times.
+
     :type latest_start_buffer: int
 
     :param schedule_start: Start of the rescheduling time window.
@@ -76,7 +79,6 @@ def solve_jssp_lateness_with_start_deviation(
     w_t, w_e, w_first = int(w_t), int(w_e), int(w_first)
 
     if not previous_schedule:
-        print("Es liegt kein ursprünglicher Schedule vor!")
         main_pct = 1.0
 
     main_pct_frac = Fraction(main_pct).limit_denominator(100)
@@ -131,15 +133,16 @@ def solve_jssp_lateness_with_start_deviation(
 
 
     # Nur jeweils letztes Zeitfenster je Maschine und Job speichern
-    for job, _, machine, _, _, end in active_ops:
-        if end >= schedule_start:
-            # Anpassung des frühsten Startpunkt je Machine
-            if machine not in fixed_ops or end > fixed_ops[machine][1]:
-                fixed_ops[machine] = (schedule_start, math.ceil(end))
+    if active_ops:
+        for job, _, machine, _, _, end in active_ops:
+            if end >= schedule_start:
+                # Anpassung des frühsten Startpunkt je Machine
+                if machine not in fixed_ops or end > fixed_ops[machine][1]:
+                    fixed_ops[machine] = (schedule_start, math.ceil(end))
 
-        # Frühester Startzeitpunkt für Folgeoperationen im Job
-        if job not in last_executed_end or end > last_executed_end[job]:
-            last_executed_end[job] = end
+            # Frühester Startzeitpunkt für Folgeoperationen im Job
+            if job not in last_executed_end or end > last_executed_end[job]:
+                last_executed_end[job] = end
 
     # 5. === Nebenbedingungen und Zielkomponenten ===
     for job_idx, job, op_idx, op_id, machine, duration in operations:
@@ -193,14 +196,18 @@ def solve_jssp_lateness_with_start_deviation(
 
     # 6. === Maschinenrestriktionen (inkl. fixierter Operationen) ===
     for m in machines:
-        machine_intervals = [interval for (j, o), (interval, machine) in intervals.items() if machine == m]
+        machine_intervals = [
+            interval for (j, o), (interval, machine) in intervals.items() if machine == m
+        ]
 
-        for fixed_start, fixed_end in fixed_ops.get(m, []):
+        if m in fixed_ops:
+            fixed_start, fixed_end = fixed_ops[m]
             start = math.floor(fixed_start)
             end = math.ceil(fixed_end)
             if end > start:
                 fixed_interval = model.NewIntervalVar(start, end - start, end, f"fixed_{m}_{end}")
                 machine_intervals.append(fixed_interval)
+
         model.AddNoOverlap(machine_intervals)
 
     # 7. === Zielfunktion ===
@@ -227,7 +234,7 @@ def solve_jssp_lateness_with_start_deviation(
 
     # --- Total Cost ---
     bound_total = bound_lateness_target + bound_deviation_target
-    total_cost = model.NewIntVar(0, bound_total)
+    total_cost = model.NewIntVar(0, bound_total, "total_cost")
     model.Add(total_cost == target_scaled_lateness_part + target_scaled_deviation_part)
     model.Minimize(total_cost)
 
@@ -244,11 +251,19 @@ def solve_jssp_lateness_with_start_deviation(
     else:
         schedule = []
 
-    # 10. === Logging ===
-    print(f"\nSolver-Status         : {solver.StatusName(status)}")
-    print(f"Objective Value       : {solver.ObjectiveValue():.2f}")
-    print(f"Best Objective Bound  : {solver.BestObjectiveBound():.2f}")
-    print(f"Laufzeit              : {solver.WallTime():.2f} Sekunden")
-    print(f"Deviation terms       : {len(deviation_terms)}")
+    # 10. Logging --------------------------------------------
+    print("Model Information")
+    model_proto = model.Proto()
+    print(f"  Number of variables       : {len(model_proto.variables)}")
+    print(f"  Number of constraints     : {len(model_proto.constraints)}")
+    print(f"  Deviation terms (IntVars) : {len(deviation_terms)}")
+
+    print("\nSolver Information")
+    print(f"  Solver status             : {solver.StatusName(status)}")
+    print(f"  Objective value           : {solver.ObjectiveValue():.2f}")
+    print(f"  Best objective bound      : {solver.BestObjectiveBound():.2f}")
+    print(f"  Wall time                 : {solver.WallTime():.2f} seconds")
+
+
 
     return schedule

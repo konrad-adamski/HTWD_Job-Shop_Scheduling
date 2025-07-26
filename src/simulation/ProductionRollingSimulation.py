@@ -16,8 +16,8 @@ class ProductionSimulation:
         self.start_time = 0
         self.end_time = None
 
-        self.active_operations = {}  # (job_id, operation) → dict mit Op-Daten
-        self.finished_log = {}  # (job_id, operation) → Dict mit Op-Daten
+        self.active_operations = {} # (job_id, operation) → dict mit Op-Daten
+        self.finished_log = {}      # (job_id, operation) → Dict mit Op-Daten
         self.all_finished_log = {}  # (job_id, operation) → Dict mit Op-Daten
 
         self.controller = None
@@ -66,7 +66,7 @@ class ProductionSimulation:
             )
 
     def resume_operation_process(self, job_id, op):
-        remaining_time = op["End"] - self.start_time
+        remaining_time = max(0, op["End"] - self.start_time)
 
         machine = self.machines[op["Machine"]]
         if self.verbose:
@@ -128,43 +128,31 @@ class ProductionSimulation:
 
     def register_active_operation(self, job_op, sim_start, planned_duration, sim_duration):
         key = (job_op[self.job_column], job_op["Operation"])
-        entry = {"Routing_ID": job_op["Routing_ID"]} if "Routing_ID" in job_op else {}
-        entry.update({
+        entry = {
             self.job_column: job_op[self.job_column],
             "Operation": job_op["Operation"],
             "Machine": job_op["Machine"],
-            self.earliest_start_column: job_op[self.earliest_start_column],
-            "Arrival": job_op["Arrival"],
             "Start": sim_start,
-            "Planned Duration": planned_duration,
             "Processing Time": sim_duration,
-            "Expected End": sim_start + planned_duration,
-            "End": sim_start + sim_duration
-        })
+            "End": sim_start + sim_duration,
+            "Expected End": sim_start + planned_duration
+        }
         self.active_operations[key] = entry
 
     def register_finished_operation(self, job_op, sim_start, sim_end, sim_duration):
-        entry = {self.job_column: job_op[self.job_column]}
-        if "Routing_ID" in job_op:
-            entry["Routing_ID"] = job_op["Routing_ID"]
-        if self.earliest_start_column in job_op:
-            entry[self.earliest_start_column] = job_op[self.earliest_start_column]
-        if "Arrival" in job_op:
-            entry["Arrival"] = job_op["Arrival"]
-
-        entry.update({
+        entry = {
+            self.job_column: job_op[self.job_column],
             "Operation": job_op["Operation"],
             "Machine": job_op["Machine"],
             "Start": round(sim_start, 2),
             "Processing Time": sim_duration,
             "End": round(sim_end, 2),
-        })
+        }
 
         self.all_finished_log[(job_op[self.job_column], job_op["Operation"])] = entry
         self.finished_log[(job_op[self.job_column], job_op["Operation"])] = entry
 
-        if (job_op[self.job_column], job_op["Operation"]) in self.active_operations:
-            del self.active_operations[(job_op[self.job_column], job_op["Operation"])]
+        self.active_operations.pop((job_op[self.job_column], job_op["Operation"]), None)
 
     def get_active_operations(self):
         return self.active_operations
@@ -195,7 +183,7 @@ class ProductionSimulation:
     def get_finished_operations_df(self):
         if not self.finished_log:
             return None
-        df =pd.DataFrame(self.finished_log.values())
+        df = pd.DataFrame(self.finished_log.values())
         return df.sort_values(by=[self.job_column, "Operation"]).reset_index(drop=True)
 
     def get_not_started_operations_df(self, df_schedule_plan):
@@ -214,11 +202,6 @@ class ProductionSimulation:
         return df.sort_values(by=[self.job_column, "Operation"]).reset_index(drop=True)
 
 
-    def set_controller(self, controller):
-        self.controller = controller
-        self.controller.add_machines(*self.machines.values())
-        # job_ids = sorted(self.dframe_schedule_plan[self.job_column].unique())
-        # self.controller.update_jobs(*job_ids)
 
 if __name__ == "__main__":
 
