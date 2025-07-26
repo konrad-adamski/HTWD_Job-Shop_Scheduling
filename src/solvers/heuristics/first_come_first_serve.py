@@ -1,16 +1,19 @@
 import time
-from collections import defaultdict
-from typing import Dict, List, Tuple, Optional
+
+from typing import Dict, List, Tuple, Optional, Set
+
+from src.solvers.builder import _get_machines_from_job_ops
 
 
 def solve(
-        job_ops: Dict[str, List[Tuple[int, str, int]]],
-        job_earliest_starts: Optional[Dict[str, int]] = None) -> List[Tuple[str, int, str, int, int, int]]:
+    job_ops: Dict[str, List[Tuple[int, str, int]]],
+    job_earliest_starts: Optional[Dict[str, int]] = None
+) -> List[Tuple[str, int, str, int, int, int]]:
     """
     Schedules operations based on a given job_ops model using the First-Come First-Served (FCFS) heuristic.
     Optionally considers earliest start times per job.
 
-    :param job_ops: Dictionary with job ID → list of tuples (operation_index, machine, duration).
+    :param job_ops: Dictionary mapping each job to a list of operations (operation_index, machine, duration).
     :type job_ops: dict[str, list[tuple[int, str, int]]]
     :param job_earliest_starts: Optional dictionary with the earliest start time per job.
                                 If None, all jobs are assumed to be available at time 0.
@@ -23,8 +26,10 @@ def solve(
     if job_earliest_starts is None:
         job_earliest_starts = {job: 0 for job in job_ops}
 
+    machines = _get_machines_from_job_ops(job_ops)
+
     job_ready = job_earliest_starts.copy()
-    machine_ready = defaultdict(int)
+    machine_ready = {m: 0 for m in machines}
     pointer = {job: 0 for job in job_ops}
     total_ops = sum(len(ops) for ops in job_ops.values())
 
@@ -63,3 +68,5 @@ def solve(
     print(f"  Laufzeit            : ~{solving_duration:.4f} Sekunden")
 
     return schedule
+
+
