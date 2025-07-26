@@ -10,28 +10,44 @@ def _build_cp_variables(
            Dict[Tuple[int, int], Tuple[cp_model.IntervalVar, str]],
            List[Tuple[int, str, int, int, str, int]]]:
     """
-    Builds CP-SAT variables for a job-shop scheduling model.
+        Builds CP-SAT variables for a job-shop scheduling model.
 
-    Uses internal integer indices for jobs and operations to ensure efficient variable mapping.
-    The returned data structures allow consistent access to start/end/interval variables
-    and operation metadata for all job-operation pairs.
+        This function generates start, end, and interval variables for each job operation using
+        internal integer indices (`job_idx`, `op_idx`) to ensure efficient and consistent mapping.
+        The operations are sorted by `op_id` to enforce the correct technological sequence within each job.
 
-    :param model: OR-Tools CP model.
-    :param job_ops: Dictionary mapping job names to a list of operations (op_id, machine, duration).
-    :param job_earliest_starts: Dictionary with the earliest start time per job.
-    :param horizon: Global upper bound for scheduling.
+        :param model: The OR-Tools CP model instance.
+        :type model: cp_model.CpModel
+        :param job_ops: Dictionary mapping job names to a list of operations.
+                       Each operation is a tuple: (op_id, machine, duration).
+        :type job_ops: Dict[str, List[Tuple[int, str, int]]]
+        :param job_earliest_starts: Dictionary with the earliest start time per job.
+        :type job_earliest_starts: Dict[str, int]
+        :param horizon: The upper bound on the scheduling time horizon.
+        :type horizon: int
 
-    :return: Tuple containing:
-        - starts: dict[(job_idx, op_idx)] → start variable (IntVar)
-        - ends: dict[(job_idx, op_idx)] → end variable (IntVar)
-        - intervals: dict[(job_idx, op_idx)] → (IntervalVar, machine)
-        - operations: list of tuples: (job_idx, job_name, op_idx, op_id, machine, duration)
-    """
+        :returns: A tuple with:
+                  - **starts**: Mapping from (job_idx, op_idx) to start time variable (IntVar).
+                  - **ends**: Mapping from (job_idx, op_idx) to end time variable (IntVar).
+                  - **intervals**: Mapping from (job_idx, op_idx) to (IntervalVar, machine).
+                  - **operations**: List of operation metadata tuples:
+                    (job_idx, job_name, op_idx, op_id, machine, duration).
+        :rtype: Tuple[
+                    Dict[Tuple[int, int], cp_model.IntVar],
+                    Dict[Tuple[int, int], cp_model.IntVar],
+                    Dict[Tuple[int, int], Tuple[cp_model.IntervalVar, str]],
+                    List[Tuple[int, str, int, int, str, int]]
+                ]
+        """
     starts, ends, intervals, op_data = {}, {}, {}, []
     jobs = sorted(job_ops.keys())
 
     for job_idx, job_name in enumerate(jobs):
-        for op_idx, (op_id, machine, duration) in enumerate(job_ops[job_name]):
+
+        # Sort job_ops[job_name] by op_id to ensure op_idx follows the technological order
+        sorted_ops = sorted(job_ops[job_name], key=lambda x: x[0])
+
+        for op_idx, (op_id, machine, duration) in enumerate(sorted_ops):
             suffix = f"{job_idx}_{op_idx}"
             est = job_earliest_starts[job_name]
             start = model.NewIntVar(est, horizon, f"start_{suffix}")
@@ -76,9 +92,18 @@ def _extract_schedule_from_operations(
     return schedule
 
 
-
 def get_original_sequences(df_original_plan, job_column="Job"):
-    """Gibt für jede Maschine die vollständige Originalreihenfolge (nach Startzeit) zurück."""
+    """
+     Returns the original operation sequence per machine, sorted by start time.
+
+     :param df_original_plan: Original schedule with columns [job_column, 'Operation', 'Machine', 'Start'].
+     :type df_original_plan: pandas.DataFrame
+     :param job_column: Name of the column representing the job ID.
+     :type job_column: str
+
+     :return: Mapping from machine to list of (job, operation) tuples in original order.
+     :rtype: Dict[str, List[Tuple[Any, Any]]]
+     """
     machine_sequences = {}
     for m, df_m in df_original_plan.groupby("Machine"):
         seq = df_m.sort_values("Start")[[job_column, "Operation"]].apply(tuple, axis=1).tolist()
@@ -87,7 +112,19 @@ def get_original_sequences(df_original_plan, job_column="Job"):
 
 
 def filter_relevant_original_sequences(original_sequences, df_jssp, job_column="Job"):
-    """Filtert pro Maschine nur die Operationen, die auch in df_jssp enthalten sind."""
+    """
+    Filters each machine's original sequence to include only operations present in the current plan.
+
+    :param original_sequences: Mapping from machine to list of (job, operation) tuples.
+    :type original_sequences: Dict[str, List[Tuple[Any, Any]]]
+    :param df_jssp: Current job-shop plan with columns [job_column, 'Operation'].
+    :type df_jssp: pandas.DataFrame
+    :param job_column: Name of the column representing the job ID.
+    :type job_column: str
+
+    :return: Filtered sequences per machine with only relevant operations.
+    :rtype: Dict[str, List[Tuple[Any, Any]]]
+    """
     relevant_ops = set(df_jssp[[job_column, "Operation"]].apply(tuple, axis=1))
     filtered_sequences = {
         m: [op for op in seq if op in relevant_ops]

@@ -10,8 +10,8 @@ from src.solvers.cp.helper import _extract_schedule_from_operations, _build_cp_v
 def solve_jssp_lateness_with_start_deviation(
         job_ops: Dict[str, List[Tuple[int, str, int]]],
         times_dict: Dict[str, Tuple[int, int]],
-        previous_schedule_dict: Optional[Dict[Tuple[str, int], int]] = None,
-        active_ops: Optional[List[Tuple[str, str, int, int]]] = None,
+        previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+        active_ops: Optional[List[Tuple[str, int, str, float, int, float]]] = None,
         w_t: int = 5, w_e: int = 1, w_first: int = 1,
         main_pct: float = 0.5, latest_start_buffer: int = 720,
         schedule_start: int = 1440, msg: bool = False,
@@ -34,14 +34,11 @@ def solve_jssp_lateness_with_start_deviation(
     :param times_dict: Dictionary mapping each job to its (earliest_start, deadline).
     :type times_dict: Dict[str, Tuple[int, int]]
 
-    :param previous_schedule_dict: Dictionary of previously planned start times, indexed by (job, operation_id).
-                                   Used to compute deviation penalties.
-    :type previous_schedule_dict: Optional[Dict[Tuple[str, int], int]]
+    :param previous_schedule: Optional previous schedule (job, op_id, machine, start, duration, end).
+    :type previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]]
 
-    :param active_ops: Optional list of already executed or ongoing operations.
-                       Each tuple must contain (job, machine, end_time).
-                       Used to block machines and restrict follow-up job scheduling.
-    :type active_ops: Optional[List[Tuple[str, str, float]]]
+    :param active_ops: Optional list of ongoing operations (job, op_id, machine, start, duration, end).
+    :type active_ops: Optional[List[Tuple[str, int, str, float, int, float]]]
 
     :param w_t: Weight for tardiness penalty.
     :type w_t: int
@@ -78,9 +75,10 @@ def solve_jssp_lateness_with_start_deviation(
     model = cp_model.CpModel()
     w_t, w_e, w_first = int(w_t), int(w_e), int(w_first)
 
-    if previous_schedule_dict is None:
+    if not previous_schedule:
         print("Es liegt kein ursprünglicher Schedule vor!")
         main_pct = 1.0
+
     main_pct_frac = Fraction(main_pct).limit_denominator(100)
     main_factor = main_pct_frac.numerator
     dev_factor = main_pct_frac.denominator - main_factor
@@ -102,32 +100,7 @@ def solve_jssp_lateness_with_start_deviation(
         horizon=horizon
     )
 
-    # 4. === Vorbereitung für Deviation, Fixierungen, Summen ===
-    if previous_schedule_dict:
-        valid_keys = {(job, op_id) for _, job, _, op_id, _, _ in operations}
-        original_start = {
-            key: int(round(start))
-            for key, start in previous_schedule_dict.items()
-            if key in valid_keys
-        }
-    else:
-        original_start = {}
-
-    # Initialisierung
-    fixed_ops: Dict[str, Tuple[int, int]] = {}  # machine → (start, end)
-    last_executed_end: Dict[str, int] = {}      # job → end_time
-
-    # Nur jeweils letztes Zeitfenster je Maschine und Job speichern
-    for job, machine, end in active_ops:
-        if end >= schedule_start:
-            # Speichere nur das späteste Ende je Maschine
-            if machine not in fixed_ops or end > fixed_ops[machine][1]:
-                fixed_ops[machine] = (math.floor(schedule_start), math.ceil(end))
-
-        # Spätestes Ende je Job
-        if job not in last_executed_end or end > last_executed_end[job]:
-            last_executed_end[job] = end
-
+    # 4. === Vorbereitung: Job-Gesamtdauer, letzte Operationen, Zielfunktionskomponenten ===
     job_total_duration = {}
     for _, job, _, _, _, duration in operations:
         job_total_duration[job] = job_total_duration.get(job, 0) + duration
@@ -136,7 +109,37 @@ def solve_jssp_lateness_with_start_deviation(
     for _, job, op_idx, _, _, _ in operations:
         last_op_index[job] = max(op_idx, last_op_index.get(job, -1))
 
-    weighted_terms, deviation_terms, first_delay_penalties = [], [], []
+    weighted_absolute_lateness_terms = []     # Tardiness + Earliness
+    deviation_terms = []    # Abweichung vom vorherigen Schedule
+    first_op_terms = []     # Earliness-ähnlicher Teilziel für erste Operation je Job
+
+
+    # 5. === Vorheriger Schedule: Startzeiten für Deviation-Strafterm ===
+    original_start = {}
+
+    if previous_schedule:
+        valid_keys = {(job, op_id) for _, job, _, op_id, _, _ in operations}
+
+        for job, op_id, machine, start, duration, end in previous_schedule:
+            key = (job, op_id)
+            if key in valid_keys:
+                original_start[key] = start
+
+    # 6. === Aktive Operationen: Maschinenblockaden und späteste Endzeiten je Job ===
+    fixed_ops: Dict[str, Tuple[int, int]] = {}  # machine → (start, end)
+    last_executed_end: Dict[str, int] = {}      # job → end_time
+
+
+    # Nur jeweils letztes Zeitfenster je Maschine und Job speichern
+    for job, _, machine, _, _, end in active_ops:
+        if end >= schedule_start:
+            # Anpassung des frühsten Startpunkt je Machine
+            if machine not in fixed_ops or end > fixed_ops[machine][1]:
+                fixed_ops[machine] = (schedule_start, math.ceil(end))
+
+        # Frühester Startzeitpunkt für Folgeoperationen im Job
+        if job not in last_executed_end or end > last_executed_end[job]:
+            last_executed_end[job] = end
 
     # 5. === Nebenbedingungen und Zielkomponenten ===
     for job_idx, job, op_idx, op_id, machine, duration in operations:
@@ -169,7 +172,7 @@ def solve_jssp_lateness_with_start_deviation(
             model.AddMaxEquality(early_penalty, [latest_desired_start - start_var, 0])
             term_first = model.NewIntVar(0, horizon * w_first, f"term_first_{job_idx}")
             model.Add(term_first == w_first * early_penalty)
-            first_delay_penalties.append(term_first)
+            first_op_terms.append(term_first)
 
         # Lateness-Terminierung (nur letzte Operation des Jobs)
         if op_idx == last_op_index[job]:
@@ -180,13 +183,13 @@ def solve_jssp_lateness_with_start_deviation(
             model.AddMaxEquality(tardiness, [lateness, 0])
             term_t = model.NewIntVar(0, horizon * w_t, f"term_t_{job_idx}")
             model.Add(term_t == w_t * tardiness)
-            weighted_terms.append(term_t)
+            weighted_absolute_lateness_terms.append(term_t)
 
             earliness = model.NewIntVar(0, horizon, f"earliness_{job_idx}")
             model.AddMaxEquality(earliness, [-lateness, 0])
             term_e = model.NewIntVar(0, horizon * w_e, f"term_e_{job_idx}")
             model.Add(term_e == w_e * earliness)
-            weighted_terms.append(term_e)
+            weighted_absolute_lateness_terms.append(term_e)
 
     # 6. === Maschinenrestriktionen (inkl. fixierter Operationen) ===
     for m in machines:
@@ -201,26 +204,31 @@ def solve_jssp_lateness_with_start_deviation(
         model.AddNoOverlap(machine_intervals)
 
     # 7. === Zielfunktion ===
-    weighted_part = model.NewIntVar(0, horizon * len(weighted_terms), "weighted_part")
-    model.Add(weighted_part == sum(weighted_terms))
 
-    deviation_part = model.NewIntVar(0, horizon * len(deviation_terms), "deviation_part")
-    model.Add(deviation_part == sum(deviation_terms))
+    # Lateness (Earliness + Tardiness of the "last Operation" / Job)
+    bound_lateness = (w_t + w_e) * horizon * len(jobs)
+    absolute_lateness_part = model.NewIntVar(0, bound_lateness, "absolute_lateness_part")
+    model.Add(absolute_lateness_part == sum(weighted_absolute_lateness_terms))
 
-    first_op_delay = model.NewIntVar(0, horizon * len(jobs) * w_first, "first_op_delay")
-    model.Add(first_op_delay == sum(first_delay_penalties))
+    # Earliness of the first Operation
+    bound_first_op = w_first * horizon * len(jobs)
+    first_op_earliness = model.NewIntVar(0, bound_first_op , "first_op_earliness")
+    model.Add(first_op_earliness == sum(first_op_terms))
 
-    combined_lateness = model.NewIntVar(-horizon * len(jobs) * 100, horizon * len(jobs) * 100)
-    model.Add(combined_lateness == weighted_part + first_op_delay)
+    # Lateness and Earliness of the first Operation
+    bound_lateness_target = main_factor * (bound_lateness + bound_first_op)
+    target_scaled_lateness_part = model.NewIntVar(0, bound_lateness_target, "target_scaled_lateness_part")
+    model.Add(target_scaled_lateness_part == main_factor * (absolute_lateness_part + first_op_earliness))
 
-    scaled_lateness = model.NewIntVar(-10000000, 10000000)
-    model.Add(scaled_lateness == main_factor * combined_lateness)
+    # Deviation Penalty
+    bound_deviation_target = dev_factor * horizon * len(deviation_terms)
+    target_scaled_deviation_part = model.NewIntVar(0, bound_deviation_target, "target_scaled_deviation_part")
+    model.Add(target_scaled_deviation_part == dev_factor * sum(deviation_terms))
 
-    deviation_penalty = model.NewIntVar(0, 10000000)
-    model.Add(deviation_penalty == dev_factor * deviation_part)
-
-    total_cost = model.NewIntVar(-100000000, 100000000)
-    model.Add(total_cost == scaled_lateness + deviation_penalty)
+    # --- Total Cost ---
+    bound_total = bound_lateness_target + bound_deviation_target
+    total_cost = model.NewIntVar(0, bound_total)
+    model.Add(total_cost == target_scaled_lateness_part + target_scaled_deviation_part)
     model.Minimize(total_cost)
 
     # 8. === Lösung berechnen ===
