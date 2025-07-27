@@ -5,94 +5,71 @@ import sys
 from ortools.sat.python import cp_model
 from typing import Dict, List, Tuple, Optional
 
-from src.solvers.cp.helper import _build_cp_variables
+from src.solvers.cp.helper import add_machine_constraints, build_cp_variables
+from src.solvers.cp.model_solver import solve_cp_model_and_extract_schedule
 
-
-def solve_cp_jssp_makespan(
+def solve_jssp_makespan_minimization(
     job_ops: Dict[str, List[Tuple[int, str, int]]],
-    job_earliest_starts: Optional[Dict[str, int]] = None,
-    time_limit: Optional[int] = 10800,
+    times_dict: Dict[str, Tuple[int, int]],
+    schedule_start: int = 1440,
     msg: bool = False,
-    gapRel: Optional[float] = None,
-    log_file: Optional[str] = None
-) -> List[Tuple[str, int, str, int, int, int]]:
+    solver_time_limit: int = 3600,
+    solver_relative_gap_limit: float = 0.0,
+    log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
     """
-    Minimizes makespan for a classic Job-Shop Scheduling Problem using a CP model.
+    Solve a Job-Shop Scheduling Problem (JSSP) using CP-SAT to minimize makespan.
 
-    :param job_ops: Dict mapping each job to its operations (operation_index, machine, duration).
-    :param job_earliest_starts: Optional dict mapping job to earliest start time (default: all 0).
-    :param time_limit: Max solver time in seconds (default: 10800).
-    :param msg: If True, logs solver progress.
-    :param gapRel: Optional relative MIP gap termination condition.
-    :param log_file: Optional file path to log solver output.
-    :return: List of scheduled operations as (job, operation_index, machine, start, duration, end).
+    :param job_ops: Dictionary mapping each job to a list of operations.
+                    Each operation is a tuple (operation_id, machine, duration).
+    :type job_ops: Dict[str, List[Tuple[int, str, int]]]
+    :param times_dict: Dictionary mapping each job to a tuple of (arrival_time, deadline).
+    :type times_dict: Dict[str, Tuple[int, int]]
+    :param schedule_start: Lower bound for any scheduled operation.
+    :type schedule_start: int
+    :param msg: If True, enable solver log output.
+    :type msg: bool
+    :param solver_time_limit: Maximum allowed solving time (in seconds).
+    :type solver_time_limit: int
+    :param solver_relative_gap_limit: Allowed relative gap between best and proven bound.
+    :type solver_relative_gap_limit: float
+    :param log_file: Optional path to file for redirecting solver output.
+    :type log_file: Optional[str]
+    :return: List of scheduled operations as (job, op_id, machine, start, duration, end).
+    :rtype: List[Tuple[str, int, str, int, int, int]]
     """
     model = cp_model.CpModel()
 
-    # 1. Preparation
-    jobs = sorted(job_ops.keys())
-    if job_earliest_starts is None:
-        job_earliest_starts = {job: 0 for job in jobs}
-
+    jobs = list(job_ops.keys())
+    earliest_start = {job: times_dict[job][0] for job in jobs}
     machines = {m for ops in job_ops.values() for _, m, _ in ops}
-    horizon = sum(d for ops in job_ops.values() for _, _, d in ops)
+    total_proc = sum(d for ops in job_ops.values() for (_, _, d) in ops)
+    horizon = max(t[1] for t in times_dict.values()) + total_proc
 
-    # 2. Variables
-    starts, ends, intervals, operations = _build_cp_variables(
-        model=model,
-        job_ops=job_ops,
-        job_earliest_starts=job_earliest_starts,
-        horizon=horizon
-    )
+    # === Create CP variables ===
+    starts, ends, intervals, operations = build_cp_variables(model, job_ops, earliest_start, horizon)
 
-    # 3. Makespan definition
+    # === Add machine constraints ===
+    add_machine_constraints(model, machines, intervals)
+
+    # === Add job precedence constraints ===
+    for job_idx, job in enumerate(jobs):
+        for op_idx in range(1, len(job_ops[job])):
+            model.Add(starts[(job_idx, op_idx)] >= ends[(job_idx, op_idx - 1)])
+
+    # === Enforce the earliest start and collect last op ends for makespan ===
     makespan = model.NewIntVar(0, horizon, "makespan")
-    for i, job in enumerate(jobs):
-        last_op = len(job_ops[job]) - 1
-        model.Add(ends[(i, last_op)] <= makespan)
+    for job_idx, job in enumerate(jobs):
+        for op_idx, (op_id, machine, duration) in enumerate(job_ops[job]):
+            model.Add(starts[(job_idx, op_idx)] >= max(earliest_start[job], schedule_start))
+            if op_idx == len(job_ops[job]) - 1:
+                model.Add(makespan >= ends[(job_idx, op_idx)])
+
     model.Minimize(makespan)
 
-    # 4. Technological constraints
-    for i, job in enumerate(jobs):
-        for o in range(1, len(job_ops[job])):
-            model.Add(starts[(i, o)] >= ends[(i, o - 1)])
-
-    # 5. Machine constraints
-    for m in machines:
-        machine_intervals = [intervals[(i, o)][0] for (i, o), (_, mach) in intervals.items() if mach == m]
-        model.AddNoOverlap(machine_intervals)
-
-    # 6. Solver config
-    solver = cp_model.CpSolver()
-    if time_limit:
-        solver.parameters.max_time_in_seconds = time_limit
-    solver.parameters.log_search_progress = msg
-    if gapRel:
-        solver.parameters.relative_gap_limit = gapRel
-
-    if log_file is not None:
-        with redirect_cpp_logs(log_file):
-            status = solver.Solve(model)
-    else:
-        status = solver.Solve(model)
-
-    # 7. Result extraction
-    schedule = []
-    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-        for i, job, o, op_id, m, d in operations:
-            st = solver.Value(starts[(i, o)])
-            schedule.append((job, op_id, m, st, d, st + d))
-    else:
-        print(f"\nSolver status     : {solver.StatusName(status)}")
-        print("No feasible solution found.")
-
-    # 8. Logging
-    print("\nSolver Information:")
-    print(f"  Status           : {solver.StatusName(status)}")
-    print(f"  Makespan         : {solver.ObjectiveValue()}")
-    print(f"  Best Bound       : {solver.BestObjectiveBound()}")
-    print(f"  Runtime          : {solver.WallTime():.2f} seconds")
-
+    # === Solve and extract ===
+    schedule = solve_cp_model_and_extract_schedule(
+        model=model, operations=operations, starts=starts, ends=ends,
+        msg=msg, time_limit=solver_time_limit, gap_limit=solver_relative_gap_limit, log_file=log_file)
     return schedule
 
 @contextlib.contextmanager

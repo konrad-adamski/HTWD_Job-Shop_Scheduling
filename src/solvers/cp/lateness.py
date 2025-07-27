@@ -1,82 +1,76 @@
-from typing import Dict, Tuple, List, Optional, Literal
-from fractions import Fraction
 import math
-import pandas as pd
+from fractions import Fraction
 from ortools.sat.python import cp_model
+from typing import Dict, Tuple, List, Optional, Literal
 
-from src.solvers.cp.helper import extract_cp_schedule_from_operations, build_cp_variables, extract_active_ops_info, \
+from src.solvers.cp.helper import build_cp_variables, extract_active_ops_info, \
     add_machine_constraints, compute_job_total_durations, get_last_operation_index, extract_original_start_times, \
     add_order_on_machines_deviation_terms
+from src.solvers.cp.model_solver import solve_cp_model_and_extract_schedule
 
 
-def solve_jssp_lateness_with_start_deviation(
-                job_ops: Dict[str, List[Tuple[int, str, int]]],
-                times_dict: Dict[str, Tuple[int, int]],
-                previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
-                active_ops: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
-                w_t: int = 5,
-                w_e: int = 1,
-                w_first: int = 1,
-                main_pct: float = 0.5,
-                duration_buffer_factor: float = 2.0,
-                schedule_start: int = 1440,
-                deviation_type: Literal["start", "order_on_machine"] = "start",
-                msg: bool = False,
-                solver_time_limit: int = 3600, solver_relative_gap_limit: float = 0.0
-    ) -> List[Tuple[str, int, str, int, int, int]]:
+def solve_jssp_lateness_with_deviation_minimization(
+        job_ops: Dict[str, List[Tuple[int, str, int]]],
+        times_dict: Dict[str, Tuple[int, int]],
+        previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+        active_ops: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+        w_t: int = 5,
+        w_e: int = 1,
+        w_first: int = 1,
+        main_pct: float = 0.5,
+        duration_buffer_factor: float = 2.0,
+        schedule_start: int = 1440,
+        deviation_type: Literal["start", "order_on_machine"] = "start",
+        msg: bool = False,
+        solver_time_limit: int = 3600, solver_relative_gap_limit: float = 0.0,
+        log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
     """
     Solve a Job-Shop Scheduling Problem (JSSP) using CP-SAT with soft objective terms for lateness,
     deviation from a previous schedule, and early job start penalties.
 
     This solver supports:
-    - Soft deadlines via weighted tardiness and earliness penalties (for last operations).
-    - Deviation minimization from previously planned start times (if provided).
-    - Penalty for jobs starting too early (based on deadline and a buffer factor).
-    - Integration of already executed operations, which block machines and delay job continuation.
+    a) Soft deadlines via weighted tardiness and earliness penalties (for last operations).
+    b) Deviation minimization from previously planned start times (if provided).
+    c) Penalty for jobs starting too early (based on deadline and a buffer factor).
+    d) Integration of active operations, which block machines and delay job continuation.
 
     :param job_ops: Dictionary mapping each job to a list of operations.
                     Each operation is a tuple (operation_id, machine, duration).
     :type job_ops: Dict[str, List[Tuple[int, str, int]]]
-
     :param times_dict: Dictionary mapping each job to a tuple of (earliest_start, deadline).
     :type times_dict: Dict[str, Tuple[int, int]]
-
     :param previous_schedule: Optional list of previously scheduled operations.
                               Format: (job, op_id, machine, start, duration, end).
     :type previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]]
-
     :param active_ops: Optional list of currently running operations (e.g., from a simulation snapshot).
                        Format: (job, op_id, machine, start, duration, end).
     :type active_ops: Optional[List[Tuple[str, int, str, int, int, int]]]
-
     :param w_t: Weight for tardiness (end time after deadline).
     :type w_t: int
-
     :param w_e: Weight for earliness (end time before deadline).
     :type w_e: int
-
     :param w_first: Weight for early job starts (first operation starts too early w.r.t. deadline).
     :type w_first: int
-
     :param main_pct: Fraction (0.0–1.0) of total objective weight allocated to lateness components (tardiness, earliness).
                      The remaining weight is applied to deviation penalties.
     :type main_pct: float
-
     :param duration_buffer_factor: Buffer factor for calculating relaxed desired start of first operation.
                                    Used as: (deadline - total_duration × factor).
     :type duration_buffer_factor: float
-
     :param schedule_start: Lower bound for any newly scheduled operation (rescheduling start point).
     :type schedule_start: int
-
+    :param deviation_type: Specifies the type of deviation penalty to use in the objective.
+                           - "start": penalizes absolute differences between planned and previous start times.
+                           - "order_on_machine": penalizes inversions in operation order on the same machine compared to the previous schedule.
+    :type deviation_type: Literal["start", "order_on_machine"]
     :param msg: If True, enable solver log output.
     :type msg: bool
-
     :param solver_time_limit: Maximum allowed solving time (in seconds).
     :type solver_time_limit: int
-
     :param solver_relative_gap_limit: Allowed relative gap between best and proven bound.
     :type solver_relative_gap_limit: float
+    :param log_file: Optional path to file for redirecting solver output.
+    :type log_file: Optional[str]
 
     :return: List of scheduled operations as (job, op_id, machine, start, duration, end).
     :rtype: List[Tuple[str, int, str, int, int, int]]
@@ -100,11 +94,11 @@ def solve_jssp_lateness_with_start_deviation(
     machines = {m for ops in job_ops.values() for _, m, _ in ops}
 
     # Worst-case upper bound for time horizon
-    total_proc = sum(d for ops in job_ops.values() for (_, _, d) in ops)
+    total_duration = sum(d for ops in job_ops.values() for (_, _, d) in ops)
     latest_deadline = max(deadline.values())
-    horizon = latest_deadline + total_proc
+    horizon = latest_deadline + total_duration
 
-    # 3. === Create CP-SAT variables ==
+    # 3. === Create variables ==
     starts, ends, intervals, operations = build_cp_variables(
         model=model,
         job_ops=job_ops,
@@ -214,32 +208,121 @@ def solve_jssp_lateness_with_start_deviation(
     model.Add(total_cost == target_scaled_lateness_part + target_scaled_deviation_part)
     model.Minimize(total_cost)
 
-    # 10. === Solve ===
-    solver = cp_model.CpSolver()
-    solver.parameters.log_search_progress = msg
-    solver.parameters.max_time_in_seconds = solver_time_limit
-    solver.parameters.relative_gap_limit = solver_relative_gap_limit
-    status = solver.Solve(model)
-
-    # 11. === Extract solution ===
-    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-        schedule = extract_cp_schedule_from_operations(operations, starts, ends, solver)
-    else:
-        schedule = []
-
-    # 12. === Log summary ===
+    # 10. === Model-Log summary ===
     print("Model Information")
     model_proto = model.Proto()
     print(f"  Number of variables       : {len(model_proto.variables)}")
     print(f"  Number of constraints     : {len(model_proto.constraints)}")
     print(f"  Deviation terms (IntVars) : {len(deviation_terms)}")
 
-    print("\nSolver Information")
-    print(f"  Solver status             : {solver.StatusName(status)}")
-    print(f"  Objective value           : {solver.ObjectiveValue()}")
-    print(f"  Best objective bound      : {solver.BestObjectiveBound()}")
-    print(f"  Number of branches        : {solver.NumBranches()}")
-    print(f"  Wall time                 : {solver.WallTime():.2f} seconds")
-
-
+    # 11. === Solve and extract solution ===
+    schedule = solve_cp_model_and_extract_schedule(
+        model=model, operations=operations, starts=starts, ends=ends,
+        msg=msg, time_limit=solver_time_limit, gap_limit=solver_relative_gap_limit, log_file=log_file)
     return schedule
+
+# Wrappers ------------------------------------------------------------------------------------------------------------
+
+def solve_jssp_lateness_with_start_deviation_minimization(
+        job_ops: Dict[str, List[Tuple[int, str, int]]], times_dict: Dict[str, Tuple[int, int]],
+        previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+        active_ops: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+        w_t: int = 5, w_e: int = 1, w_first: int = 1, main_pct: float = 0.5,
+        duration_buffer_factor: float = 2.0, schedule_start: int = 1440, msg: bool = False,
+        solver_time_limit: int = 3600, solver_relative_gap_limit: float = 0.0,
+        log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
+    """
+    Solves a JSSP minimizing lateness and start-time deviation.
+
+    :param job_ops: Job operations as {job: [(op_id, machine, duration), ...]}.
+    :param times_dict: Mapping from job to (earliest_start, deadline).
+    :param previous_schedule: Optional prior plan [(job, op_id, machine, start, duration, end)].
+    :param active_ops: Optional running ops (same format as previous_schedule).
+    :param w_t: Weight for tardiness.
+    :param w_e: Weight for earliness.
+    :param w_first: Weight for early first operation starts.
+    :param main_pct: Portion of cost focused on lateness (0.0–1.0).
+    :param duration_buffer_factor: Factor for relaxed first op start.
+    :param schedule_start: Earliest time for new operations.
+    :param msg: Enable solver log output.
+    :param solver_time_limit: Max solver time (in seconds).
+    :param solver_relative_gap_limit: Allowed MIP gap.
+    :param log_file: Optional path to file for redirecting solver output.
+
+    :return: Scheduled operations as (job, op_id, machine, start, duration, end).
+    """
+    return solve_jssp_lateness_with_deviation_minimization(
+        job_ops=job_ops, times_dict=times_dict, previous_schedule=previous_schedule, active_ops=active_ops,
+        w_t=w_t, w_e=w_e, w_first=w_first, main_pct=main_pct, duration_buffer_factor=duration_buffer_factor,
+        schedule_start=schedule_start, deviation_type="start", msg=msg, solver_time_limit=solver_time_limit,
+        solver_relative_gap_limit=solver_relative_gap_limit, log_file = log_file
+    )
+
+def solve_jssp_lateness_with_order_deviation_minimization(
+        job_ops: Dict[str, List[Tuple[int, str, int]]], times_dict: Dict[str, Tuple[int, int]],
+        previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+        active_ops: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+        w_t: int = 5, w_e: int = 1, w_first: int = 1, main_pct: float = 0.5,
+        duration_buffer_factor: float = 2.0, schedule_start: int = 1440, msg: bool = False,
+        solver_time_limit: int = 3600, solver_relative_gap_limit: float = 0.0,
+        log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
+    """
+    Solves a JSSP minimizing lateness and deviation from original machine order.
+
+    :param job_ops: Job operations as {job: [(op_id, machine, duration), ...]}.
+    :param times_dict: Mapping from job to (earliest_start, deadline).
+    :param previous_schedule: Optional prior plan [(job, op_id, machine, start, duration, end)].
+    :param active_ops: Optional running ops (same format as previous_schedule).
+    :param w_t: Weight for tardiness.
+    :param w_e: Weight for earliness.
+    :param w_first: Weight for early first operation starts.
+    :param main_pct: Portion of cost focused on lateness (0.0–1.0).
+    :param duration_buffer_factor: Factor for relaxed first op start.
+    :param schedule_start: Earliest time for new operations.
+    :param msg: Enable solver log output.
+    :param solver_time_limit: Max solver time (in seconds).
+    :param solver_relative_gap_limit: Allowed MIP gap.
+    :param log_file: Optional path to file for redirecting solver output.
+
+    :return: Scheduled operations as (job, op_id, machine, start, duration, end).
+    """
+    return solve_jssp_lateness_with_deviation_minimization(
+        job_ops=job_ops, times_dict=times_dict, previous_schedule=previous_schedule, active_ops=active_ops,
+        w_t=w_t, w_e=w_e, w_first=w_first, main_pct=main_pct, duration_buffer_factor=duration_buffer_factor,
+        schedule_start=schedule_start, deviation_type="order_on_machine", msg=msg, solver_time_limit=solver_time_limit,
+        solver_relative_gap_limit=solver_relative_gap_limit, log_file = log_file
+    )
+
+
+def solve_jssp_tardiness_minimization(
+        job_ops: Dict[str, List[Tuple[int, str, int]]], times_dict: Dict[str, Tuple[int, int]],
+        previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+        active_ops: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+        main_pct: float = 1.0, duration_buffer_factor: float = 2.0, schedule_start: int = 1440,
+        deviation_type: Literal["start", "order_on_machine"] = "start", msg: bool = False,
+        solver_time_limit: int = 3600, solver_relative_gap_limit: float = 0.0,
+        log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
+    """
+    Solves a JSSP minimizing tardiness, optionally with deviation penalties.
+
+    :param job_ops: Job operations as {job: [(op_id, machine, duration), ...]}.
+    :param times_dict: Mapping from job to (earliest_start, deadline).
+    :param previous_schedule: Optional prior plan [(job, op_id, machine, start, duration, end)].
+    :param active_ops: Optional running ops (same format as previous_schedule).
+    :param main_pct: Portion of objective weight on tardiness (0.0–1.0).
+    :param duration_buffer_factor: Factor for relaxed start target of first op.
+    :param schedule_start: Lower bound for all operation start times.
+    :param deviation_type: Deviation type: "start" or "order_on_machine".
+    :param msg: Enable solver log output.
+    :param solver_time_limit: Max solver time in seconds.
+    :param solver_relative_gap_limit: Allowed MIP gap.
+    :param log_file: Optional path to file for redirecting solver output.
+
+    :return: Scheduled operations as (job, op_id, machine, start, duration, end).
+    """
+    return solve_jssp_lateness_with_deviation_minimization(
+        job_ops=job_ops, times_dict=times_dict, previous_schedule=previous_schedule, active_ops=active_ops,
+        w_t=1, w_e=0, w_first=0, main_pct=main_pct, duration_buffer_factor=duration_buffer_factor,
+        schedule_start=schedule_start, deviation_type=deviation_type, msg=msg, solver_time_limit=solver_time_limit,
+        solver_relative_gap_limit=solver_relative_gap_limit, log_file = log_file
+    )

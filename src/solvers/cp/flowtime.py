@@ -1,168 +1,160 @@
 from ortools.sat.python import cp_model
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Literal
 import math
 from fractions import Fraction
 
-from src.solvers.cp.helper import _build_cp_variables, _extract_schedule_from_operations, extract_active_ops_info
+from src.solvers.cp.helper import extract_cp_schedule_from_operations, build_cp_variables, extract_active_ops_info, \
+    add_machine_constraints, get_last_operation_index, extract_original_start_times, \
+    add_order_on_machines_deviation_terms
+from src.solvers.cp.model_solver import solve_cp_model_and_extract_schedule
 
 
-def solve_jssp_flowtime_with_deviation(
-        job_ops: Dict[str, List[Tuple[int, str, int]]],
-        times_dict: Dict[str, Tuple[int, int]],
-        previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
-        active_ops: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
-        main_pct: float = 0.5,
-        schedule_start: int = 1440,
-        msg: bool = False,
-        solver_time_limit: int = 3600,
-        solver_relative_gap_limit: float = 0.0
-    ) -> List[Tuple[str, int, str, int, int, int]]:
+def solve_jssp_flowtime_with_deviation_minimization(
+    job_ops: Dict[str, List[Tuple[int, str, int]]],
+    times_dict: Dict[str, Tuple[int, int]],
+    previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+    active_ops: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
+    main_pct: float = 0.5,
+    schedule_start: int = 1440,
+    deviation_type: Literal["start", "order_on_machine"] = "start",
+    msg: bool = False,
+    solver_time_limit: int = 3600,
+    solver_relative_gap_limit: float = 0.0,
+    log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
     """
-    Solve a Job-Shop Scheduling Problem (JSSP) using CP-SAT,
-    minimizing the total Flow Time and penalizing deviation from a previous schedule.
+    Solve a Job-Shop Scheduling Problem (JSSP) using CP-SAT with soft objective terms for total flow time
+    and deviation from a previous schedule.
+
+    This solver supports:
+    a) Flow time minimization (sum of job end times minus arrival times).
+    b) Deviation minimization from previously planned start times or machine order.
+    c) Integration of active operations, which block machines and delay job continuation.
 
     :param job_ops: Dictionary mapping each job to a list of operations.
-    :param times_dict: Dictionary mapping each job to (earliest_start, deadline).
-    :param previous_schedule: Optional list of tuples (job, op_id, machine, start, duration, end).
-    :param active_ops: Optional list of active operations (job, op_id, machine, start, duration, end).
-    :param main_pct: Fraction of weight on flowtime vs deviation (1.0 = only flowtime).
-    :param schedule_start: Start of the rescheduling time window.
-    :param msg: If True, logs solver search progress.
-    :param solver_time_limit: Time limit for the solver in seconds.
-    :param solver_relative_gap_limit: Acceptable relative optimality gap.
-    :return: resulting schedule as list of (job, operation_id, machine, start_time, duration, end_time).
+                    Each operation is a tuple (operation_id, machine, duration).
+    :type job_ops: Dict[str, List[Tuple[int, str, int]]]
+    :param times_dict: Dictionary mapping each job to a tuple of (arrival_time, deadline).
+    :type times_dict: Dict[str, Tuple[int, int]]
+    :param previous_schedule: Optional list of previously scheduled operations.
+                              Format: (job, op_id, machine, start, duration, end).
+    :type previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]]
+    :param active_ops: Optional list of currently running operations (e.g., from a simulation snapshot).
+                       Format: (job, op_id, machine, start, duration, end).
+    :type active_ops: Optional[List[Tuple[str, int, str, int, int, int]]]
+    :param main_pct: Fraction (0.0–1.0) of total objective weight allocated to flow time.
+                     The remaining weight is applied to deviation penalties.
+    :type main_pct: float
+    :param schedule_start: Lower bound for any newly scheduled operation (rescheduling start point).
+    :type schedule_start: int
+    :param deviation_type: Specifies the type of deviation penalty to use in the objective.
+                           - "start": penalizes absolute differences between planned and previous start times.
+                           - "order_on_machine": penalizes inversions in operation order on the same machine compared to the previous schedule.
+    :type deviation_type: Literal["start", "order_on_machine"]
+    :param msg: If True, enable solver log output.
+    :type msg: bool
+    :param solver_time_limit: Maximum allowed solving time (in seconds).
+    :type solver_time_limit: int
+    :param solver_relative_gap_limit: Allowed relative gap between best and proven bound.
+    :type solver_relative_gap_limit: float
+    :param log_file: Optional path to file for redirecting solver output.
+    :type log_file: Optional[str]
+
+    :return: List of scheduled operations as (job, op_id, machine, start, duration, end).
+    :rtype: List[Tuple[str, int, str, int, int, int]]
     """
 
-    # 1. === Modellinitialisierung und Gewichtung berechnen ===
+    # 1. === Model initialization and weight preprocessing ===
     model = cp_model.CpModel()
 
     if not previous_schedule:
         main_pct = 1.0
 
-    main_pct_frac = Fraction(main_pct).limit_denominator(100)
-    main_factor = main_pct_frac.numerator
-    dev_factor = main_pct_frac.denominator - main_factor
+    main_frac = Fraction(main_pct).limit_denominator(100)
+    main_factor = main_frac.numerator
+    dev_factor = main_frac.denominator - main_factor
 
-    # 2. === Vorverarbeitung: Zeiten, Maschinen, Horizont ===
+    # 2. === Preprocessing: arrivals, machines, planning horizon ===
     jobs = list(job_ops.keys())
     earliest_start = {job: times_dict[job][0] for job in jobs}
     machines = {m for ops in job_ops.values() for _, m, _ in ops}
     total_proc = sum(d for ops in job_ops.values() for (_, _, d) in ops)
-    latest_deadline = max(times_dict[j][1] for j in jobs)
-    horizon = int(total_proc + latest_deadline)
+    horizon = max(t[1] for t in times_dict.values()) + total_proc
 
-    # 3. === CP-Variablen erzeugen ===
-    starts, ends, intervals, operations = _build_cp_variables(
-        model=model,
-        job_ops=job_ops,
-        job_earliest_starts=earliest_start,
-        horizon=horizon
-    )
+    # 3. === Create variables ===
+    starts, ends, intervals, operations = build_cp_variables(model, job_ops, earliest_start, horizon)
+    last_op_index = get_last_operation_index(operations)
 
-    # 4. === letzte Operationen bestimmen ===
-    last_op_index: Dict[str, int] = {}
-    for _, job, op_idx, _, _, _ in operations:
-        last_op_index[job] = max(op_idx, last_op_index.get(job, -1))
-
-    # 6. === Aktive Operationen: Maschinenblockaden und späteste Endzeiten je Job ===
-    machines_delays, job_ops_delays = extract_active_ops_info(active_ops, schedule_start)
-
-    # 6. === Previous Schedule für Deviation ===
-    original_start = {}
-    if previous_schedule:
-        valid_keys = {(job, op_id) for _, job, _, op_id, _, _ in operations}
-        for job, op_id, machine, start, duration, end in previous_schedule:
-            key = (job, op_id)
-            if key in valid_keys:
-                original_start[key] = start
-
-    # 7. === Nebenbedingungen + Zielfunktionsterme ===
+    # 4. === Preparation: Cost terms ===
     flowtime_terms = []
     deviation_terms = []
 
+    # 5. === Previous schedule: extract start times for deviation penalties ===
+    original_start = extract_original_start_times(previous_schedule, operations)
+
+    # 6. === Active operations: block machines and delay jobs ===
+    machines_delays, job_ops_delays = extract_active_ops_info(active_ops, schedule_start)
+
+    # 7. === Machine constraints ===
+    add_machine_constraints(model, machines, intervals, machines_delays)
+
+    if deviation_type == "order_on_machine" and previous_schedule:
+        deviation_terms += add_order_on_machines_deviation_terms(model, previous_schedule, operations, starts)
+
+    # 8. === Operation-level constraints and cost assignments ===
     for job_idx, job, op_idx, op_id, machine, duration in operations:
         start_var = starts[(job_idx, op_idx)]
         end_var = ends[(job_idx, op_idx)]
 
-        # Mindeststartzeit
+        # Respect the earliest start: arrival time and machine delay (based on active operations)
         min_start = max(earliest_start[job], schedule_start)
         if job in job_ops_delays:
-            min_start = max(min_start, job_ops_delays[job])
+            min_start = max(min_start, int(math.ceil(job_ops_delays[job])))
         model.Add(start_var >= min_start)
 
-        # Technologische Sequenz
+        # Technological constraint (precedence within the job)
         if op_idx > 0:
             model.Add(start_var >= ends[(job_idx, op_idx - 1)])
 
-        # FlowTime (nur letzte Operation)
+        # Deviation from original schedule
+        if deviation_type == "start":
+            key = (job, op_id)
+            if key in original_start:
+                diff = model.NewIntVar(-horizon, horizon, f"diff_{job_idx}_{op_idx}")
+                dev = model.NewIntVar(0, horizon, f"dev_{job_idx}_{op_idx}")
+                model.Add(diff == start_var - original_start[key])
+                model.AddAbsEquality(dev, diff)
+                deviation_terms.append(dev)
+
+        # FlowTime (only last operation)
         if op_idx == last_op_index[job]:
             arrival = earliest_start[job]
             flowtime = model.NewIntVar(0, horizon, f"flowtime_{job}")
             model.Add(flowtime == end_var - arrival)
             flowtime_terms.append(flowtime)
 
-        # Deviation zur alten Startzeit
-        key = (job, op_id)
-        if key in original_start:
-            diff = model.NewIntVar(-horizon, horizon, f"diff_{job_idx}_{op_idx}")
-            dev = model.NewIntVar(0, horizon, f"dev_{job_idx}_{op_idx}")
-            model.Add(diff == start_var - original_start[key])
-            model.AddAbsEquality(dev, diff)
-            deviation_terms.append(dev)
+    # 9. === Objective function ===
+    bound_scaled_flow = main_factor * horizon * len(jobs)
+    scaled_flow = model.NewIntVar(0, bound_scaled_flow, "scaled_flow")
+    model.Add(scaled_flow == main_factor * sum(flowtime_terms))
 
-    # 8. === Maschinenrestriktionen ===
-    for machine in machines:
-        machine_intervals = [
-            interval for (j, o), (interval, machine_name) in intervals.items() if machine_name == machine
-        ]
-        if machine in machines_delays:
-            start, end = machines_delays[machine]
-            if end > start:
-                fixed_interval = model.NewIntervalVar(start, end - start, end, f"fixed_{machine}")
-                machine_intervals.append(fixed_interval)
-        model.AddNoOverlap(machine_intervals)
+    bound_scaled_dev = dev_factor * horizon * len(deviation_terms)
+    scaled_dev = model.NewIntVar(0, bound_scaled_dev, "scaled_dev")
+    model.Add(scaled_dev == dev_factor * sum(deviation_terms))
 
-    # 9. === Zielfunktion: gewichtete Summe von Flowtime + Deviation ===
-    bound_flow = horizon * len(flowtime_terms)
-    bound_dev = horizon * len(deviation_terms)
-
-    flow_obj = model.NewIntVar(0, bound_flow, "flow_obj")
-    dev_obj = model.NewIntVar(0, bound_dev, "dev_obj")
-
-    model.Add(flow_obj == sum(flowtime_terms))
-    model.Add(dev_obj == sum(deviation_terms))
-
-    total_cost = model.NewIntVar(0, main_factor * bound_flow + dev_factor * bound_dev, "total_cost")
-    model.Add(total_cost == main_factor * flow_obj + dev_factor * dev_obj)
-
+    total_cost = model.NewIntVar(0, bound_scaled_flow + bound_scaled_dev, "total_cost")
+    model.Add(total_cost == scaled_flow + scaled_dev)
     model.Minimize(total_cost)
 
-    # 10. === Lösung berechnen ===
-    solver = cp_model.CpSolver()
-    solver.parameters.log_search_progress = msg
-    solver.parameters.max_time_in_seconds = solver_time_limit
-    solver.parameters.relative_gap_limit = solver_relative_gap_limit
-    status = solver.Solve(model)
 
-    # 11. === Ergebnis extrahieren ===
-    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-        schedule = _extract_schedule_from_operations(operations, starts, ends, solver)
-    else:
-        schedule = []
-
-    # 12. === Logging ===
+    # 10. === Model-Log summary ===
     print("Model Information")
     model_proto = model.Proto()
     print(f"  Number of variables       : {len(model_proto.variables)}")
     print(f"  Number of constraints     : {len(model_proto.constraints)}")
     print(f"  Deviation terms (IntVars) : {len(deviation_terms)}")
-    print(f"  Flowtime terms (Jobs)     : {len(flowtime_terms)}")
 
-    print("\nSolver Information")
-    print(f"  Solver status             : {solver.StatusName(status)}")
-    print(f"  Objective value           : {solver.ObjectiveValue()}")
-    print(f"  Best objective bound      : {solver.BestObjectiveBound()}")
-    print(f"  Number of branches        : {solver.NumBranches()}")
-    print(f"  Wall time                 : {solver.WallTime():.2f} seconds")
-
+    # 11. === Solve and extract solution ===
+    schedule = solve_cp_model_and_extract_schedule(
+        model=model, operations=operations, starts=starts, ends=ends,
+        msg=msg, time_limit=solver_time_limit, gap_limit=solver_relative_gap_limit, log_file=log_file)
     return schedule

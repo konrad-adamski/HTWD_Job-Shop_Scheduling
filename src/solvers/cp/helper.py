@@ -3,8 +3,8 @@ from ortools.sat.python import cp_model
 
 
 def build_cp_variables(
-                model: cp_model.CpModel, job_ops: Dict[str, List[Tuple[int, str, int]]],
-                job_earliest_starts: Dict[str, int], horizon: int
+        model: cp_model.CpModel, job_ops: Dict[str, List[Tuple[int, str, int]]],
+        job_earliest_starts: Dict[str, int], horizon: int
 ) -> Tuple[Dict[Tuple[int, int], cp_model.IntVar],
            Dict[Tuple[int, int], cp_model.IntVar],
            Dict[Tuple[int, int], Tuple[cp_model.IntervalVar, str]],
