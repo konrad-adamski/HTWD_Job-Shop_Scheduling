@@ -2,7 +2,7 @@ import time
 
 from typing import Dict, List, Tuple, Optional, Set
 
-from src.solvers.model_builder import _get_machines_from_job_ops
+from src.solvers.model_builder import get_machines_from_job_ops
 
 
 def solve(
@@ -26,7 +26,7 @@ def solve(
     if job_earliest_starts is None:
         job_earliest_starts = {job: 0 for job in job_ops}
 
-    machines = _get_machines_from_job_ops(job_ops)
+    machines = get_machines_from_job_ops(job_ops)
 
     job_ready = job_earliest_starts.copy()
     machine_ready = {m: 0 for m in machines}
