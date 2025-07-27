@@ -1,8 +1,8 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from ortools.sat.python import cp_model
 
 
-def _build_cp_variables(
+def build_cp_variables(
                 model: cp_model.CpModel, job_ops: Dict[str, List[Tuple[int, str, int]]],
                 job_earliest_starts: Dict[str, int], horizon: int
 ) -> Tuple[Dict[Tuple[int, int], cp_model.IntVar],
@@ -62,8 +62,167 @@ def _build_cp_variables(
     return starts, ends, intervals, op_data
 
 
+def extract_active_ops_info(
+    active_ops: Optional[List[Tuple[str, int, str, int, int, int]]],
+    schedule_start: int
+) -> Tuple[Dict[str, Tuple[int, int]], Dict[str, int]]:
+    """
+    Extracts resource and job delay information from already active operations.
 
-def _extract_schedule_from_operations(
+    Used to ensure that:
+    - machines are blocked until the end of running operations,
+    - and successor operations in a job do not start before the last active one.
+
+    :param active_ops: List of tuples representing active or finished operations.
+                       Each tuple is (job, op_id, machine, start, duration, end).
+    :param schedule_start: Start time of the rescheduling window. Only operations
+                           ending after or at this time are considered.
+
+    :return:
+        - machines_delays: Dict mapping each machine to a blocking interval (start, end)
+        - job_ops_delays: Dict mapping each job to the latest end time of its active operations
+    """
+    machines_delays: Dict[str, Tuple[int, int]] = {}
+    job_ops_delays: Dict[str, int] = {}
+
+    if active_ops:
+        for job, _, machine, _, _, end in active_ops:
+            if end >= schedule_start:
+                if machine not in machines_delays or end > machines_delays[machine][1]:
+                    machines_delays[machine] = (schedule_start, end)
+            if job not in job_ops_delays or end > job_ops_delays[job]:
+                job_ops_delays[job] = end
+
+    return machines_delays, job_ops_delays
+
+def compute_job_total_durations(
+    operations: List[Tuple[int, str, int, int, str, int]]
+) -> Dict[str, int]:
+    """
+    Computes the total duration of all operations for each job.
+
+    :param operations: List of tuples (job_idx, job_name, op_idx, op_id, machine, duration)
+    :return: Dict mapping job_name to total processing duration
+    """
+    job_total_duration = {}
+    for _, job, _, _, _, duration in operations:
+        job_total_duration[job] = job_total_duration.get(job, 0) + duration
+    return job_total_duration
+
+def get_last_operation_index(
+    operations: List[Tuple[int, str, int, int, str, int]]
+) -> Dict[str, int]:
+    """
+    Determines the highest operation index (op_idx) for each job.
+
+    :param operations: List of tuples (job_idx, job_name, op_idx, op_id, machine, duration)
+    :return: Dict mapping job_name to last op_idx
+    """
+    last_op_index = {}
+    for _, job, op_idx, _, _, _ in operations:
+        last_op_index[job] = max(op_idx, last_op_index.get(job, -1))
+    return last_op_index
+
+def extract_original_start_times(
+    previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]],
+    operations: List[Tuple[int, str, int, int, str, int]]
+) -> Dict[Tuple[str, int], int]:
+    """
+    Extracts original start times for each (job, op_id) from a given previous schedule,
+    limited to the operations currently present in the model.
+
+    :param previous_schedule: List of tuples (job, op_id, machine, start, duration, end)
+    :param operations: List of tuples (job_idx, job_name, op_idx, op_id, machine, duration)
+    :return: Dict mapping (job, op_id) → original start time
+    """
+    original_start = {}
+    if previous_schedule:
+        valid_keys = {(job, op_id) for _, job, _, op_id, _, _ in operations}
+        for job, op_id, machine, start, duration, end in previous_schedule:
+            key = (job, op_id)
+            if key in valid_keys:
+                original_start[key] = start
+    return original_start
+
+
+def add_machine_constraints(
+    model: cp_model.CpModel,
+    machines: set,
+    intervals: Dict[Tuple[int, int], Tuple[cp_model.IntervalVar, str]],
+    machines_delays: Dict[str, Tuple[int, int]]
+) -> None:
+    """
+    Adds NoOverlap constraints for all machines, including fixed blocking intervals.
+
+    :param model: The CP-SAT model instance.
+    :param machines: Set of all machine names.
+    :param intervals: Mapping from (job_idx, op_idx) to (IntervalVar, machine_name).
+    :param machines_delays: Optional blocking intervals per machine (start, end).
+    """
+    for machine in machines:
+        machine_intervals = [
+            interval for (_, _), (interval, machine_name) in intervals.items() if machine_name == machine
+        ]
+        if machine in machines_delays:
+            start, end = machines_delays[machine]
+            if end > start:
+                fixed_interval = model.NewIntervalVar(start, end - start, end, f"fixed_{machine}")
+                machine_intervals.append(fixed_interval)
+        model.AddNoOverlap(machine_intervals)
+
+
+def add_order_on_machines_deviation_terms(model, previous_schedule, operations, starts):
+    """
+    Add Boolean deviation terms for order violations on machines based on a previous schedule.
+
+    For each machine, pairs of operations are compared according to their previous order.
+    If the order is violated in the current schedule (i.e., the later-op starts before the earlier-op),
+    a Boolean variable is set to 1 and added to the list of deviation terms.
+
+    :param model: CpModel instance.
+    :param previous_schedule: List of tuples (job, op_id, machine, start, duration, end).
+    :param operations: List of operation identifiers including job_idx, job, op_idx, op_id, machine, duration.
+    :param starts: Dict of start time IntVars indexed by (job_idx, op_idx).
+
+    :return: List of BoolVar terms indicating order violations.
+    """
+    import collections
+
+    deviation_terms = []
+
+    # 1. Extract and sort the original machine order from the previous schedule
+    machine_order = collections.defaultdict(list)
+    for job, op_id, machine, start, _, _ in previous_schedule:
+        machine_order[machine].append((start, job, op_id))
+    for m in machine_order:
+        machine_order[m].sort()  # sort by start time
+
+    # 2. Build lookup from (job, op_id) to (job_idx, op_idx)
+    jobop_to_index = {(job, op_id): (job_idx, op_idx)
+                      for job_idx, job, op_idx, op_id, _, _ in operations}
+
+    # 3. For each pair (a, b) in machine sequence: if a before b, penalize b before a
+    for m, sequence in machine_order.items():
+        for i in range(len(sequence)):
+            for j in range(i + 1, len(sequence)):
+                _, job_a, op_a = sequence[i]
+                _, job_b, op_b = sequence[j]
+
+                if (job_a, op_a) in jobop_to_index and (job_b, op_b) in jobop_to_index:
+                    a_idx = jobop_to_index[(job_a, op_a)]
+                    b_idx = jobop_to_index[(job_b, op_b)]
+                    a_start = starts[a_idx]
+                    b_start = starts[b_idx]
+
+                    violated = model.NewBoolVar(f"inv_{m}_{a_idx}_{b_idx}")
+                    model.Add(b_start < a_start).OnlyEnforceIf(violated)
+                    model.Add(b_start >= a_start).OnlyEnforceIf(violated.Not())
+                    deviation_terms.append(violated)
+
+    return deviation_terms
+
+
+def extract_cp_schedule_from_operations(
     operations: List[Tuple[int, str, int, int, str, int]],
     starts: Dict[Tuple[int, int], cp_model.IntVar],
     ends: Dict[Tuple[int, int], cp_model.IntVar],
@@ -91,7 +250,7 @@ def _extract_schedule_from_operations(
         schedule.append((job, op_id, machine, start, duration, end))
     return schedule
 
-
+# ------------------------------------------
 def get_original_sequences(df_original_plan, job_column="Job"):
     """
      Returns the original operation sequence per machine, sorted by start time.
