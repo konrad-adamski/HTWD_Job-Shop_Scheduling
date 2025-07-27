@@ -2,10 +2,10 @@ import pulp
 
 from typing import Dict, List, Tuple, Set
 
-def _add_machine_conflict_constraints(
+def add_machine_conflict_constraints(
                 prob: pulp.LpProblem, starts: Dict[Tuple[str, int], pulp.LpVariable],
                 job_ops: Dict[str, List[Tuple[int, str, int]]], machines: Set[str],
-                big_m: float, epsilon: int = 1) -> None:
+                big_m: float) -> None:
     """
     Adds disjunctive machine conflict constraints to a PuLP MILP model for job-shop scheduling.
 
@@ -18,7 +18,6 @@ def _add_machine_conflict_constraints(
                     as tuples (operation_index, machine, duration).
     :param machines: Set of all machine identifiers involved in the schedule.
     :param big_m: Big-M constant used in disjunctive time separation constraints.
-    :param epsilon: Time buffer between consecutive operations on the same machine (default is 1).
     """
     for m in machines:
         ops_on_m = [
@@ -33,19 +32,19 @@ def _add_machine_conflict_constraints(
                 if j1 == j2:
                     continue
                 y = pulp.LpVariable(f"y_{j1}_{o1}_{j2}_{o2}", cat="Binary")
-                prob += starts[(j1, o1)] + d1 + epsilon <= starts[(j2, o2)] + big_m * (1 - y)
-                prob += starts[(j2, o2)] + d2 + epsilon <= starts[(j1, o1)] + big_m * y
+                prob += starts[(j1, o1)] + d1 <= starts[(j2, o2)] + big_m * (1 - y)
+                prob += starts[(j2, o2)] + d2 <= starts[(j1, o1)] + big_m * y
 
 
 
-def _add_technological_constraints(problem, starts, job_ops):
+def add_technological_constraints(problem, starts, job_ops):
     for job, ops in job_ops.items():
         for o in range(1, len(ops)):
             d_prev = ops[o - 1][2]
             problem += starts[(job, o)] >= starts[(job, o - 1)] + d_prev
 
 
-def _add_makespan_definition(problem, starts, job_ops, makespan):
+def add_makespan_definition(problem, starts, job_ops, makespan):
     for job, ops in job_ops.items():
         last_op_idx = len(ops) - 1
         d_last = ops[last_op_idx][2]

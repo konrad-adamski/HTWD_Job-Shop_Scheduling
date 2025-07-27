@@ -38,14 +38,39 @@ def get_job_ops_dict(
         job_ops[job] = ops
     return job_ops
 
+def get_earliest_start_dict(
+    df: pd.DataFrame,
+    job_column: str = "Job",
+    earliest_start_column: str = "Ready Time"
+) -> Dict[str, int]:
+    """
+    Build a dictionary mapping each job to its earliest start time.
+
+    :param df: DataFrame containing job timing information.
+    :type df: pandas.DataFrame
+    :param job_column: Name of the column identifying the job (default: "Job").
+    :type job_column: str
+    :param earliest_start_column: Column name for the earliest start time (default: "Ready Time").
+    :type earliest_start_column: str
+    :return: Dictionary mapping job to the earliest start time (as int).
+    :rtype: Dict[str, int]
+    """
+    if earliest_start_column not in df.columns:
+        raise ValueError(f"Missing required column: '{earliest_start_column}'")
+
+    subset = df[[job_column, earliest_start_column]].copy()
+    subset[earliest_start_column] = subset[earliest_start_column].astype(int)
+
+    return subset.set_index(job_column)[earliest_start_column].to_dict()
 
 def get_times_dict(
-                df: pd.DataFrame, job_column: str = "Job",
-                earliest_start_column: str = "Ready Time",
-                due_date_column: str = "Deadline") -> Dict[str, Tuple[int, int]]:
+    df: pd.DataFrame,
+    job_column: str = "Job",
+    earliest_start_column: str = "Ready Time",
+    due_date_column: str = "Deadline"
+) -> Dict[str, Tuple[int, int]]:
     """
-    Build a dictionary mapping each job to a tuple of (earliest start time, due date),
-    with strict type checking to ensure both values are integers.
+    Build a dictionary mapping each job to a tuple of (earliest start time, due date).
 
     :param df: DataFrame containing job timing information.
     :type df: pandas.DataFrame
@@ -55,23 +80,10 @@ def get_times_dict(
     :type earliest_start_column: str
     :param due_date_column: Column name for the due date or deadline (default: "Deadline").
     :type due_date_column: str
-    :return: Dictionary mapping job to (earliest start time, deadline), both as integers.
+    :return: Dictionary mapping job to (earliest start time, deadline), both cast to int.
     :rtype: Dict[str, Tuple[int, int]]
-    :raises ValueError: If any value in the start or due date column is not an integer.
     """
     subset = df[[job_column, earliest_start_column, due_date_column]].copy()
-
-    # Check for non-integer values
-    for col in [earliest_start_column, due_date_column]:
-        if not pd.api.types.is_integer_dtype(subset[col]):
-            # Allow float if all values are whole numbers
-            if pd.api.types.is_float_dtype(subset[col]):
-                if not (subset[col] % 1 == 0).all():
-                    raise ValueError(f"Column '{col}' contains non-integer values.")
-            else:
-                raise ValueError(f"Column '{col}' must be of integer type.")
-
-    # Convert to int explicitly to ensure types are correct in output
     subset[earliest_start_column] = subset[earliest_start_column].astype(int)
     subset[due_date_column] = subset[due_date_column].astype(int)
 

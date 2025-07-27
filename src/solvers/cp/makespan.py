@@ -5,12 +5,12 @@ import sys
 from ortools.sat.python import cp_model
 from typing import Dict, List, Tuple, Optional
 
-from src.solvers.cp.helper import add_machine_constraints, build_cp_variables
+from src.solvers.cp.model_builder import add_machine_constraints, build_cp_variables
 from src.solvers.cp.model_solver import solve_cp_model_and_extract_schedule
 
 def solve_jssp_makespan_minimization(
     job_ops: Dict[str, List[Tuple[int, str, int]]],
-    times_dict: Dict[str, Tuple[int, int]],
+    earliest_start: Dict[str, int],
     schedule_start: int = 1440,
     msg: bool = False,
     solver_time_limit: int = 3600,
@@ -22,8 +22,8 @@ def solve_jssp_makespan_minimization(
     :param job_ops: Dictionary mapping each job to a list of operations.
                     Each operation is a tuple (operation_id, machine, duration).
     :type job_ops: Dict[str, List[Tuple[int, str, int]]]
-    :param times_dict: Dictionary mapping each job to a tuple of (arrival_time, deadline).
-    :type times_dict: Dict[str, Tuple[int, int]]
+    :param earliest_start: Dictionary mapping each job to its earliest possible start time.
+    :type earliest_start: Dict[str, int]
     :param schedule_start: Lower bound for any scheduled operation.
     :type schedule_start: int
     :param msg: If True, enable solver log output.
@@ -40,10 +40,11 @@ def solve_jssp_makespan_minimization(
     model = cp_model.CpModel()
 
     jobs = list(job_ops.keys())
-    earliest_start = {job: times_dict[job][0] for job in jobs}
     machines = {m for ops in job_ops.values() for _, m, _ in ops}
-    total_proc = sum(d for ops in job_ops.values() for (_, _, d) in ops)
-    horizon = max(t[1] for t in times_dict.values()) + total_proc
+
+    # Worst-case upper bound for time horizon
+    total_duration = sum(d for ops in job_ops.values() for (_, _, d) in ops)
+    horizon = max(max(earliest_start.values()), schedule_start) + total_duration
 
     # === Create CP variables ===
     starts, ends, intervals, operations = build_cp_variables(model, job_ops, earliest_start, horizon)
@@ -66,10 +67,20 @@ def solve_jssp_makespan_minimization(
 
     model.Minimize(makespan)
 
+    # === Model-Log summary ===
+    print("Model Information")
+    model_proto = model.Proto()
+    print(f"  Number of variables       : {len(model_proto.variables)}")
+    print(f"  Number of constraints     : {len(model_proto.constraints)}")
+
     # === Solve and extract ===
-    schedule = solve_cp_model_and_extract_schedule(
+    schedule, solver_info = solve_cp_model_and_extract_schedule(
         model=model, operations=operations, starts=starts, ends=ends,
         msg=msg, time_limit=solver_time_limit, gap_limit=solver_relative_gap_limit, log_file=log_file)
+
+    print("\nSolver Information:")
+    for key, value in solver_info.items():
+        print(f"  {key.replace('_', ' ').capitalize():25}: {value}")
     return schedule
 
 @contextlib.contextmanager

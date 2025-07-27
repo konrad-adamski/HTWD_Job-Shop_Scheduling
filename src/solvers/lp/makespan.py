@@ -1,9 +1,9 @@
-import time
 import pulp
 from typing import Dict, List, Tuple, Optional, Literal
 
-from src.solvers.lp.builder import _add_machine_conflict_constraints, _add_technological_constraints, \
-    _add_makespan_definition
+from src.solvers.lp.problem_builder import add_machine_conflict_constraints, add_technological_constraints, \
+    add_makespan_definition
+from src.solvers.lp.problem_solver import solve_lp_problem_and_extract_schedule
 
 
 def solve_jssp_makespan(
@@ -11,9 +11,10 @@ def solve_jssp_makespan(
     job_earliest_starts: Optional[Dict[str, int]] = None,
     solver_type: Literal["CBC", "HiGHS"] = "CBC",
     var_cat: Literal["Continuous", "Integer"] = "Continuous",
-    time_limit: int | None = 10800,
-    epsilon: float = 0.0,
-    **solver_args
+    msg: bool = False,
+    solver_time_limit: int = 3600,
+    solver_relative_gap_limit: float = 0.0,
+    log_file: Optional[str] = None
 ) -> List[Tuple[str, int, str, int, int, int]]:
     """
     Solves the job-shop scheduling problem to minimize makespan using a MILP model (via PuLP).
@@ -31,20 +32,17 @@ def solve_jssp_makespan(
     :type var_cat: Literal["Continuous", "Integer"]
     :param time_limit: Optional time limit for the solver in seconds.
     :type time_limit: int or None
-    :param epsilon: Buffer time between two operations on the same machine.
-    :type epsilon: float
     :param solver_args: Additional solver arguments passed to the PuLP solver command.
     :return: List of scheduled operations as tuples (job, operation, machine, start, duration, end).
     :rtype: list[tuple[str, int, str, int, int, int]]
     """
-    solver_start_time = time.time()
 
     if job_earliest_starts is None:
         job_earliest_starts = {job: 0 for job in job_ops}
 
     machines = {machine for ops in job_ops.values() for _, machine, _ in ops}
 
-    # 1. Modell aufsetzen
+    # === Build MILP Model ==
     problem = pulp.LpProblem("JSSP_Makespan_Model", pulp.LpMinimize)
 
     starts = {
@@ -56,56 +54,25 @@ def solve_jssp_makespan(
     makespan = pulp.LpVariable("makespan", lowBound=0, cat=var_cat)
     problem += makespan
 
-    # 2. Technologische Abhängigkeiten + Makespan-Definition
-    _add_technological_constraints(problem, starts, job_ops)
-    _add_makespan_definition(problem, starts, job_ops, makespan)
+    # === Add Constraints ===
+    add_technological_constraints(problem, starts, job_ops)
+    add_makespan_definition(problem, starts, job_ops, makespan)
 
-
-    # 3. Maschinenkonflikte mit Big-M
-    sum_proc_time = sum(d for ops in job_ops.values() for _, _, d in ops)
+    # === Add machine disjunctive constraints using Big-M ===
+    # Prevents overlap on machines; Big-M = max release + total processing
+    total_duration = sum(d for ops in job_ops.values() for _, _, d in ops)
     max_arrival = max(job_earliest_starts.values())
-    big_m = max_arrival + sum_proc_time
+    big_m = max_arrival + total_duration
+    add_machine_conflict_constraints(prob=problem, starts=starts, job_ops=job_ops, machines=machines,big_m=big_m)
 
-    _add_machine_conflict_constraints(
-        prob=problem,
-        starts=starts,
-        job_ops=job_ops,
-        machines=machines,
-        big_m=big_m,
-        epsilon=epsilon
+    # === Solve and Extract Schedule ===
+    schedule, solver_info = solve_lp_problem_and_extract_schedule(
+        problem=problem, starts=starts, job_ops=job_ops, solver_type=solver_type, time_limit=solver_time_limit,
+        gap_limit=solver_relative_gap_limit, msg = msg, log_file=log_file
     )
 
-    # 4. Solver konfigurieren
-    if time_limit is not None:
-        solver_args.setdefault("timeLimit", time_limit)
-    solver_args.setdefault("msg", True)
-
-    if solver_type == "HiGHS":
-        cmd = pulp.HiGHS_CMD(**solver_args)
-    elif solver_type == "CBC":
-        cmd = pulp.PULP_CBC_CMD(**solver_args)
-    else:
-        raise ValueError("Solver must be 'CBC' or 'HiGHS'")
-
-    problem.solve(cmd)
-
-    # 5. Ergebnisse extrahieren
-    schedule = []
-    for job, ops in job_ops.items():
-        for o, (op_id, machine, duration) in enumerate(ops):
-            start_time = starts[(job, o)].varValue
-            end_time = start_time + duration
-            schedule.append((job, op_id, machine, round(start_time, 2), duration, round(end_time, 2)))
-
-    # 6. Logging
-    makespan_value = pulp.value(problem.objective)
-    solving_duration = time.time() - solver_start_time
-
-    print("\nSolver-Informationen:")
-    print(f"  Makespan            : {makespan_value:.2f}")
-    print(f"  Solver-Status       : {pulp.LpStatus[problem.status]}")
-    print(f"  Variablenanzahl     : {len(problem.variables())}")
-    print(f"  Constraintanzahl    : {len(problem.constraints)}")
-    print(f"  Laufzeit            : ~{solving_duration:.2f} Sekunden")
-
+    # === Solver Info ==
+    print("\nSolver Information:")
+    for key, value in solver_info.items():
+        print(f"  {key.replace('_', ' ').capitalize():25}: {value}")
     return schedule

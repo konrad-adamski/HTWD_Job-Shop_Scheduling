@@ -2,7 +2,7 @@ import time
 
 from typing import Dict, List, Tuple, Optional, Set
 
-from src.solvers.builder import _get_machines_from_job_ops
+from src.solvers.model_builder import _get_machines_from_job_ops
 
 
 def solve(

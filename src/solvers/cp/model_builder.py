@@ -149,25 +149,31 @@ def add_machine_constraints(
     model: cp_model.CpModel,
     machines: set,
     intervals: Dict[Tuple[int, int], Tuple[cp_model.IntervalVar, str]],
-    machines_delays: Dict[str, Tuple[int, int]]
+    machines_delays: Optional[Dict[str, Tuple[int, int]]] = None
 ) -> None:
     """
-    Adds NoOverlap constraints for all machines, including fixed blocking intervals.
+    Adds NoOverlap constraints for all machines, including optional fixed blocking intervals.
 
     :param model: The CP-SAT model instance.
     :param machines: Set of all machine names.
     :param intervals: Mapping from (job_idx, op_idx) to (IntervalVar, machine_name).
-    :param machines_delays: Optional blocking intervals per machine (start, end).
+    :param machines_delays: Optional dictionary of blocking intervals per machine as (start, end).
     """
     for machine in machines:
+        # Collect operation intervals for the machine
         machine_intervals = [
-            interval for (_, _), (interval, machine_name) in intervals.items() if machine_name == machine
+            interval for (_, _), (interval, machine_name) in intervals.items()
+            if machine_name == machine
         ]
-        if machine in machines_delays:
+
+        # Add fixed blocking interval if defined for this machine
+        if machines_delays and machine in machines_delays:
             start, end = machines_delays[machine]
             if end > start:
                 fixed_interval = model.NewIntervalVar(start, end - start, end, f"fixed_{machine}")
                 machine_intervals.append(fixed_interval)
+
+        # Add NoOverlap constraint for the machine
         model.AddNoOverlap(machine_intervals)
 
 
@@ -249,45 +255,4 @@ def extract_cp_schedule_from_operations(
         end = solver.Value(ends[(job_idx, op_idx)])
         schedule.append((job, op_id, machine, start, duration, end))
     return schedule
-
-# ------------------------------------------
-def get_original_sequences(df_original_plan, job_column="Job"):
-    """
-     Returns the original operation sequence per machine, sorted by start time.
-
-     :param df_original_plan: Original schedule with columns [job_column, 'Operation', 'Machine', 'Start'].
-     :type df_original_plan: pandas.DataFrame
-     :param job_column: Name of the column representing the job ID.
-     :type job_column: str
-
-     :return: Mapping from machine to list of (job, operation) tuples in original order.
-     :rtype: Dict[str, List[Tuple[Any, Any]]]
-     """
-    machine_sequences = {}
-    for m, df_m in df_original_plan.groupby("Machine"):
-        seq = df_m.sort_values("Start")[[job_column, "Operation"]].apply(tuple, axis=1).tolist()
-        machine_sequences[m] = seq
-    return machine_sequences
-
-
-def filter_relevant_original_sequences(original_sequences, df_jssp, job_column="Job"):
-    """
-    Filters each machine's original sequence to include only operations present in the current plan.
-
-    :param original_sequences: Mapping from machine to list of (job, operation) tuples.
-    :type original_sequences: Dict[str, List[Tuple[Any, Any]]]
-    :param df_jssp: Current job-shop plan with columns [job_column, 'Operation'].
-    :type df_jssp: pandas.DataFrame
-    :param job_column: Name of the column representing the job ID.
-    :type job_column: str
-
-    :return: Filtered sequences per machine with only relevant operations.
-    :rtype: Dict[str, List[Tuple[Any, Any]]]
-    """
-    relevant_ops = set(df_jssp[[job_column, "Operation"]].apply(tuple, axis=1))
-    filtered_sequences = {
-        m: [op for op in seq if op in relevant_ops]
-        for m, seq in original_sequences.items()
-    }
-    return filtered_sequences
 

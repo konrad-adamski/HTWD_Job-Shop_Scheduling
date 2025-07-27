@@ -1,14 +1,14 @@
 import contextlib
 import os
 import sys
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Any
 
 from ortools.sat.python import cp_model
 
 def solve_cp_model_and_extract_schedule(
                 model: cp_model.CpModel, operations, starts, ends,
                 msg: bool, time_limit: int, gap_limit: float,
-                log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
+                log_file: Optional[str] = None) -> Tuple[List[Tuple[str, int, str, int, int, int]], Dict[str, Any]]:
     """
     Solves a CP-SAT model and extracts the schedule if feasible.
 
@@ -20,7 +20,7 @@ def solve_cp_model_and_extract_schedule(
     :param time_limit: Maximum time for solver (in seconds).
     :param gap_limit: Acceptable relative gap limit.
     :param log_file: Optional path to file for redirecting solver output.
-    :return: List of scheduled operations if feasible, else empty list.
+    :return: Tuple of (scheduled operations list, solver info dict).
     """
     solver = cp_model.CpSolver()
     solver.parameters.log_search_progress = msg
@@ -33,16 +33,18 @@ def solve_cp_model_and_extract_schedule(
     else:
         status = solver.Solve(model)
 
-    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-        return _extract_cp_schedule_from_operations(operations, starts, ends, solver)
+    solver_info = {
+        "status": solver.StatusName(status),
+        "objective_value": solver.ObjectiveValue() if status in [cp_model.OPTIMAL, cp_model.FEASIBLE] else None,
+        "best_objective_bound": solver.BestObjectiveBound(),
+        "number_of_branches": solver.NumBranches(),
+        "wall_time": solver.WallTime()
+    }
 
-    print("\nSolver Information")
-    print(f"  Solver status             : {solver.StatusName(status)}")
-    print(f"  Objective value           : {solver.ObjectiveValue()}")
-    print(f"  Best objective bound      : {solver.BestObjectiveBound()}")
-    print(f"  Number of branches        : {solver.NumBranches()}")
-    print(f"  Wall time                 : {solver.WallTime():.2f} seconds")
-    return []
+    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+        return _extract_cp_schedule_from_operations(operations, starts, ends, solver), solver_info
+
+    return [], solver_info
 
 
 def _extract_cp_schedule_from_operations(
@@ -78,28 +80,28 @@ def _extract_cp_schedule_from_operations(
 @contextlib.contextmanager
 def _redirect_cpp_logs(logfile_path: str = "cp_output.log"):
     """
-    Kontextmanager zur temporären Umleitung von stdout/stderr,
-    z.B. für OR-Tools CP-Solver-Ausgaben. Nach dem Block wird die
-    normale Ausgabe wiederhergestellt.
+    Context manager to temporarily redirect stdout/stderr,
+    e.g. to capture output from OR-Tools CP-SAT solver or other C++ logs.
+    After the block, original output streams are restored.
     """
 
-    # Flush current output buffers
+    # Flush any current output to avoid mixing content
     sys.stdout.flush()
     sys.stderr.flush()
 
-    # Originale stdout/stderr sichern
+    # Save original file descriptors for stdout and stderr
     original_stdout_fd = os.dup(1)
     original_stderr_fd = os.dup(2)
 
     with open(logfile_path, 'w') as f:
         try:
-            # Umleiten
+            # Redirect stdout and stderr to the log file
             os.dup2(f.fileno(), 1)
             os.dup2(f.fileno(), 2)
             yield
-            f.flush() # wichtig für Jupyter oder späte Flush-Probleme
+            f.flush()  # Ensures content is flushed to file, esp. in Jupyter
         finally:
-            # Wiederherstellen
+            # Restore original stdout and stderr
             os.dup2(original_stdout_fd, 1)
             os.dup2(original_stderr_fd, 2)
             os.close(original_stdout_fd)

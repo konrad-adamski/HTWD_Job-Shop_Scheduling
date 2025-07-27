@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Tuple, Literal
 import math
 from fractions import Fraction
 
-from src.solvers.cp.helper import extract_cp_schedule_from_operations, build_cp_variables, extract_active_ops_info, \
+from src.solvers.cp.model_builder import build_cp_variables, extract_active_ops_info, \
     add_machine_constraints, get_last_operation_index, extract_original_start_times, \
     add_order_on_machines_deviation_terms
 from src.solvers.cp.model_solver import solve_cp_model_and_extract_schedule
@@ -11,7 +11,7 @@ from src.solvers.cp.model_solver import solve_cp_model_and_extract_schedule
 
 def solve_jssp_flowtime_with_deviation_minimization(
     job_ops: Dict[str, List[Tuple[int, str, int]]],
-    times_dict: Dict[str, Tuple[int, int]],
+    earliest_start: Dict[str, int],
     previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
     active_ops: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
     main_pct: float = 0.5,
@@ -33,8 +33,8 @@ def solve_jssp_flowtime_with_deviation_minimization(
     :param job_ops: Dictionary mapping each job to a list of operations.
                     Each operation is a tuple (operation_id, machine, duration).
     :type job_ops: Dict[str, List[Tuple[int, str, int]]]
-    :param times_dict: Dictionary mapping each job to a tuple of (arrival_time, deadline).
-    :type times_dict: Dict[str, Tuple[int, int]]
+    :param earliest_start: Dictionary mapping each job to its earliest possible start time.
+    :type earliest_start: Dict[str, int]
     :param previous_schedule: Optional list of previously scheduled operations.
                               Format: (job, op_id, machine, start, duration, end).
     :type previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]]
@@ -75,10 +75,11 @@ def solve_jssp_flowtime_with_deviation_minimization(
 
     # 2. === Preprocessing: arrivals, machines, planning horizon ===
     jobs = list(job_ops.keys())
-    earliest_start = {job: times_dict[job][0] for job in jobs}
     machines = {m for ops in job_ops.values() for _, m, _ in ops}
-    total_proc = sum(d for ops in job_ops.values() for (_, _, d) in ops)
-    horizon = max(t[1] for t in times_dict.values()) + total_proc
+
+    # Worst-case upper bound for time horizon
+    total_duration = sum(d for ops in job_ops.values() for (_, _, d) in ops)
+    horizon = max(max(earliest_start.values()), schedule_start) + total_duration
 
     # 3. === Create variables ===
     starts, ends, intervals, operations = build_cp_variables(model, job_ops, earliest_start, horizon)
@@ -154,7 +155,50 @@ def solve_jssp_flowtime_with_deviation_minimization(
     print(f"  Deviation terms (IntVars) : {len(deviation_terms)}")
 
     # 11. === Solve and extract solution ===
-    schedule = solve_cp_model_and_extract_schedule(
+    schedule, solver_info = solve_cp_model_and_extract_schedule(
         model=model, operations=operations, starts=starts, ends=ends,
         msg=msg, time_limit=solver_time_limit, gap_limit=solver_relative_gap_limit, log_file=log_file)
+
+    print("\nSolver Information:")
+    for key, value in solver_info.items():
+        print(f"  {key.replace('_', ' ').capitalize():25}: {value}")
+    return schedule
+
+# Wrappers ------------------------------------------------------------------------------------------------------------
+
+def solve_jssp_flowtime_minimization(
+    job_ops: Dict[str, List[Tuple[int, str, int]]],
+    earliest_start: Dict[str, int],
+    schedule_start: int = 0,
+    msg: bool = False,
+    solver_time_limit: int = 3600,
+    solver_relative_gap_limit: float = 0.0,
+    log_file: Optional[str] = None
+) -> List[Tuple[str, int, str, int, int, int]]:
+    """
+    Solve JSSP with flow time minimization only (no deviation or active ops).
+
+    :param job_ops: Dictionary of job operations (op_id, machine, duration).
+    :param earliest_start: Dictionary of earliest start times per job.
+    :param schedule_start: Time from which scheduling begins.
+    :param msg: Enable solver logs.
+    :param solver_time_limit: Max time allowed for solver.
+    :param solver_relative_gap_limit: Allowed relative gap.
+    :param log_file: Optional log file for solver output.
+
+    :return: List of scheduled operations.
+    """
+    schedule = solve_jssp_flowtime_with_deviation_minimization(
+        job_ops=job_ops,
+        earliest_start=earliest_start,
+        previous_schedule=None,
+        active_ops=None,
+        main_pct=1.0,
+        schedule_start=schedule_start,
+        deviation_type="start",  # ignored anyway when main_pct = 1
+        msg=msg,
+        solver_time_limit=solver_time_limit,
+        solver_relative_gap_limit=solver_relative_gap_limit,
+        log_file=log_file
+    )
     return schedule

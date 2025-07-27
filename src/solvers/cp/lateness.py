@@ -3,7 +3,7 @@ from fractions import Fraction
 from ortools.sat.python import cp_model
 from typing import Dict, Tuple, List, Optional, Literal
 
-from src.solvers.cp.helper import build_cp_variables, extract_active_ops_info, \
+from src.solvers.cp.model_builder import build_cp_variables, extract_active_ops_info, \
     add_machine_constraints, compute_job_total_durations, get_last_operation_index, extract_original_start_times, \
     add_order_on_machines_deviation_terms
 from src.solvers.cp.model_solver import solve_cp_model_and_extract_schedule
@@ -216,9 +216,13 @@ def solve_jssp_lateness_with_deviation_minimization(
     print(f"  Deviation terms (IntVars) : {len(deviation_terms)}")
 
     # 11. === Solve and extract solution ===
-    schedule = solve_cp_model_and_extract_schedule(
+    schedule, solver_info = solve_cp_model_and_extract_schedule(
         model=model, operations=operations, starts=starts, ends=ends,
         msg=msg, time_limit=solver_time_limit, gap_limit=solver_relative_gap_limit, log_file=log_file)
+
+    print("\nSolver Information:")
+    for key, value in solver_info.items():
+        print(f"  {key.replace('_', ' ').capitalize():25}: {value}")
     return schedule
 
 # Wrappers ------------------------------------------------------------------------------------------------------------
