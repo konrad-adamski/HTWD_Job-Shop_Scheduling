@@ -6,7 +6,7 @@ import pandas as pd
 
 
 class ProductionSimulation:
-    def __init__(self, job_column: str = 'Job', earliest_start_column='Arrival', verbose=True, sigma=0.2):
+    def __init__(self, job_column: str = 'Job', earliest_start_column: str | None = None, verbose=True, sigma=0.2):
         self.job_column = job_column
         self.earliest_start_column = earliest_start_column
         self.verbose = verbose
@@ -33,9 +33,10 @@ class ProductionSimulation:
                 self.machines[m] = Machine(self.env, m)
 
     def job_process(self, job_id, job_operations):
-        earliest_start_time = job_operations[0][self.earliest_start_column]
-        delay = max(earliest_start_time - self.env.now, 0)
-        yield self.env.timeout(delay)
+        if self.earliest_start_column is not None:
+            earliest_start_time = job_operations[0][self.earliest_start_column]
+            delay = max(earliest_start_time - self.env.now, 0)
+            yield self.env.timeout(delay)
 
         for op in job_operations:
             machine = self.machines[op["Machine"]]
@@ -233,4 +234,6 @@ if __name__ == "__main__":
     simulation.run(None, start_time=2880, end_time=None)
     print("\n", "---" * 20)
     print(simulation.get_finished_operations_df())
+
+    print(simulation.get_active_operations_df())
 

@@ -25,8 +25,6 @@ def get_jobs_with_lateness_metrics(df_plan_in: pd.DataFrame) -> pd.DataFrame:
 # Dataframe gruppiert --------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 
-import pandas as pd
-import numpy as np
 
 def get_jobs_aggregated(df: pd.DataFrame, column: str = 'Tardiness', steps=60, min_val=0, max_val=120, right_closed: bool = False) -> pd.DataFrame:
     # 1. Spalte prüfen

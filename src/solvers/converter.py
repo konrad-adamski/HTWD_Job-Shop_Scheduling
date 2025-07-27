@@ -1,5 +1,7 @@
+import math
+
 import pandas as pd
-from typing import List, Tuple, Set, Dict
+from typing import List, Tuple, Set, Dict, Optional
 
 
 def get_job_ops_dict(
@@ -76,6 +78,43 @@ def get_times_dict(
     return subset.set_index(job_column)[[earliest_start_column, due_date_column]].apply(tuple, axis=1).to_dict()
 
 
+def get_active_ops(
+                df: Optional[pd.DataFrame], job_column: str = "Job", op_column: str = "Operation",
+                machine_column: str = "Machine", start_column: str = "Start", duration_column: str = "Processing Time",
+                end_column: str = "End") -> Optional[List[Tuple[str, int, str, int, int, int]]]:
+    """
+    Extracts a list of active operations from a DataFrame in the expected format:
+    (job, operation_id, machine, start_time, duration, end_time)
+
+    :param df: DataFrame containing operation schedule data.
+    :param job_column: Name of the job column.
+    :param op_column: Name of the operation ID column.
+    :param machine_column: Name of the machine column.
+    :param start_column: Name of the start time column.
+    :param duration_column: Name of the duration column.
+    :param end_column: Name of the end time column.
+    :return: List of tuples with (job, op_id, machine, start, duration, end),
+             or None if the input DataFrame is None.
+    """
+    if df is None:
+        return None
+
+    required_columns = [job_column, op_column, machine_column, start_column, duration_column, end_column]
+    missing = set(required_columns) - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    active_ops = []
+    for _, row in df.iterrows():
+        job = str(row[job_column])
+        op_id = int(row[op_column])
+        machine = str(row[machine_column])
+        start = math.floor(row[start_column])
+        duration = int(row[duration_column])
+        end = math.ceil(row[end_column])
+        active_ops.append((job, op_id, machine, start, duration, end))
+
+    return active_ops
 # --------------------------------------------------------------------------------------------------------------
 
 
@@ -135,25 +174,3 @@ def get_schedule_dframe(
     )
     return df.sort_values([job_column, start_column]).reset_index(drop=True)
 
-def enrich_schedule_dframe(df_schedule, df_jobs_information, on="Job"):
-    """
-    Enrich a schedule DataFrame with additional job information using a right join.
-
-    This function performs a right join on the specified key (default: "Job") and automatically
-    removes any duplicate columns from the left DataFrame (`df_schedule`) to avoid conflicts.
-    As a result, shared columns from `df_jobs_information` are preserved without suffixes.
-
-    :param df_schedule: The schedule DataFrame (left side of the join).
-    :type df_schedule: pandas.DataFrame
-    :param df_jobs_information: The job information DataFrame to enrich with (right side of the join).
-    :type df_jobs_information: pandas.DataFrame
-    :param on: The column name to join on. Defaults to "Job".
-    :type on: str
-
-    :return: A merged DataFrame containing all rows from `df_jobs_information` and schedule data (if available).
-    :rtype: pandas.DataFrame
-    """
-    common_cols = set(df_schedule.columns) & set(df_jobs_information.columns) - {on}
-    df_schedule_clean = df_schedule.drop(columns=list(common_cols))
-    df_merged = pd.merge(df_schedule_clean, df_jobs_information, on=on, how="right")
-    return df_merged

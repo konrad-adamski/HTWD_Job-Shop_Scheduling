@@ -77,12 +77,26 @@ def add_groupwise_lognormal_deadlines_by_group_mean(
     return df_times
 
 
-def improve_created_deadlines(df_times: pd.DataFrame, min_covered_proc_times_percentage: float = 0.75) -> pd.DataFrame:
-    min_covered_proc_times_percentage = min(min_covered_proc_times_percentage, 1)
-    df_times['Deadline'] = np.maximum(df_times['Deadline'],
-                                      df_times['Ready Time']
-                                      + df_times['Job Processing Time'] * min_covered_proc_times_percentage
-                                      )
+def ensure_reasonable_deadlines(df_times: pd.DataFrame, min_coverage: float = 0.90) -> pd.DataFrame:
+    """
+    Ensures that each job's deadline covers at least a minimum percentage of its total processing time.
+    Also removes the 'End' column if present.
+
+    :param df_times: DataFrame with at least the columns ['Ready Time', 'Deadline', 'Job Processing Time'].
+    :param min_coverage: Minimum fraction (0–1) of the job processing time that must be covered by the deadline.
+                         Defaults to 0.90 (i.e. 90% of total processing time).
+    :return: DataFrame with updated 'Deadline' values and 'End' column removed if present.
+    """
+    min_coverage = min(min_coverage, 1.0)
+
+    df_times['Deadline'] = np.maximum(
+        df_times['Deadline'],
+        df_times['Ready Time'] + df_times['Job Processing Time'] * min_coverage
+    )
 
     df_times['Deadline'] = np.ceil(df_times['Deadline']).astype(int)
+
+    if 'End' in df_times.columns:
+        df_times = df_times.drop(columns=['End'])
+
     return df_times

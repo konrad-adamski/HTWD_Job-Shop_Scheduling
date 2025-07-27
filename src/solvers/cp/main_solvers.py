@@ -13,9 +13,9 @@ def solve_jssp_lateness_with_start_deviation(
         previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]] = None,
         active_ops: Optional[List[Tuple[str, int, str, float, int, float]]] = None,
         w_t: int = 5, w_e: int = 1, w_first: int = 1,
-        main_pct: float = 0.5, latest_start_buffer: int = 720,
+        main_pct: float = 0.5, duration_buffer_factor: float = 1.5,
         schedule_start: int = 1440, msg: bool = False,
-        timeLimit: int = 3600, gapRel: float = 0.0
+        solver_time_limit: int = 3600, solver_relative_gap_limit: float = 0.0
     ) -> pd.DataFrame:
     """
     Solve a Job-Shop Scheduling Problem (JSSP) using CP-SAT, with objectives to minimize lateness,
@@ -52,11 +52,10 @@ def solve_jssp_lateness_with_start_deviation(
     :param main_pct: Fraction of weight assigned to the lateness objective (0.0 to 1.0).
     :type main_pct: float
 
-    :param latest_start_buffer: This defines a relaxed latest-start target for first operations:
-        (deadline - total job duration - buffer). Without the buffer, the target would be strict and might slow down
-        the solver due to reduced flexibility in start times.
-
-    :type latest_start_buffer: int
+    :param duration_buffer_factor: Scaling factor applied to total job duration to define a relaxed target for
+        the first operation: (deadline - duration × factor). Without this buffer, the model would enforce a
+        strict earliest start, potentially increasing solver complexity.
+    :type duration_buffer_factor: float
 
     :param schedule_start: Start of the rescheduling time window.
     :type schedule_start: int
@@ -64,11 +63,11 @@ def solve_jssp_lateness_with_start_deviation(
     :param msg: If True, logs solver search progress.
     :type msg: bool
 
-    :param timeLimit: Time limit for the solver in seconds.
-    :type timeLimit: int
+    :param solver_time_limit: Time limit for the solver in seconds.
+    :type solver_time_limit: int
 
-    :param gapRel: Acceptable relative optimality gap.
-    :type gapRel: float
+    :param solver_relative_gap_limit: Acceptable relative optimality gap.
+    :type solver_relative_gap_limit: float
 
     :return: resulting schedule as a list of (job, operation_id, machine, start_time, duration, end_time).
     :rtype: List[Tuple[str, int, str, int, int, int]]
@@ -114,7 +113,6 @@ def solve_jssp_lateness_with_start_deviation(
     weighted_absolute_lateness_terms = []   # List of Job Lateness Terms (Tardiness + Earliness for last operations)
     first_op_terms = []                     # List of 'First Earliness' Terms for First Operations of Jobs
     deviation_terms = []                    # List of Deviation Penalty Terms (Difference from previous start times)
-
 
     # 5. === Vorheriger Schedule: Startzeiten für Deviation-Strafterm ===
     original_start = {}
@@ -170,7 +168,8 @@ def solve_jssp_lateness_with_start_deviation(
 
         # Frühstart-Strafe (nur erste Operation im Job)
         if op_idx == 0:
-            latest_desired_start = deadline[job] - job_total_duration[job] - latest_start_buffer
+            latest_desired_start = max(schedule_start, deadline[job]
+                                       - int(job_total_duration[job] * duration_buffer_factor))
             early_penalty = model.NewIntVar(0, horizon, f"early_penalty_{job_idx}")
             model.AddMaxEquality(early_penalty, [latest_desired_start - start_var, 0])
             term_first = model.NewIntVar(0, horizon * w_first, f"term_first_{job_idx}")
@@ -241,8 +240,8 @@ def solve_jssp_lateness_with_start_deviation(
     # 8. === Lösung berechnen ===
     solver = cp_model.CpSolver()
     solver.parameters.log_search_progress = msg
-    solver.parameters.max_time_in_seconds = timeLimit
-    solver.parameters.relative_gap_limit = gapRel
+    solver.parameters.max_time_in_seconds = solver_time_limit
+    solver.parameters.relative_gap_limit = solver_relative_gap_limit
     status = solver.Solve(model)
 
     # 9. === Ergebnis aufbereiten ===
@@ -260,10 +259,10 @@ def solve_jssp_lateness_with_start_deviation(
 
     print("\nSolver Information")
     print(f"  Solver status             : {solver.StatusName(status)}")
-    print(f"  Objective value           : {solver.ObjectiveValue():.2f}")
-    print(f"  Best objective bound      : {solver.BestObjectiveBound():.2f}")
+    print(f"  Objective value           : {solver.ObjectiveValue()}")
+    print(f"  Best objective bound      : {solver.BestObjectiveBound()}")
+    print(f"  Number of branches        : {solver.NumBranches()}")
     print(f"  Wall time                 : {solver.WallTime():.2f} seconds")
-
 
 
     return schedule
