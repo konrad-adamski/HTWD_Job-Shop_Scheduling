@@ -1,3 +1,4 @@
+import collections
 from typing import Dict, List, Tuple, Optional
 from ortools.sat.python import cp_model
 
@@ -192,7 +193,6 @@ def add_order_on_machines_deviation_terms(model, previous_schedule, operations, 
 
     :return: List of BoolVar terms indicating order violations.
     """
-    import collections
 
     deviation_terms = []
 

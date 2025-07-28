@@ -37,10 +37,8 @@ def compute_sum_levenshtein_distance(
 
 
 def compute_mean_kendall_tau(
-        previous_schedule: pd.DataFrame,
-        new_schedule: pd.DataFrame,
-        comparison_start_time: float
-) -> Optional[float]:
+        previous_schedule: pd.DataFrame, new_schedule: pd.DataFrame,
+        comparison_start_time: float) -> Optional[float]:
     """
     Computes the mean Kendall's Tau across all machines between the job sequences
     of the original and revised schedules after a given start time.
@@ -92,6 +90,27 @@ def has_sequence_changed(
             return True  # early exit on first change
     return False
 
+
+def get_shared_operations_number(
+        previous_schedule: pd.DataFrame, new_schedule: pd.DataFrame,
+        comparison_start_time: float) -> int:
+    """
+    Computes the total number of shared operations across all machines after a given start time.
+    Only operations that appear in both schedules per machine are counted.
+
+    :param previous_schedule: The original schedule with 'Job', 'Machine', 'Start'.
+    :param new_schedule: The revised schedule in same format.
+    :param comparison_start_time: Threshold time; only operations with start >= this value are considered.
+
+    :return: Total number of shared jobs (operations) across all common machines.
+    """
+    machines, original_sequences, _ = _get_machines_and_sequences_dicts(
+        previous_schedule, new_schedule, comparison_start_time
+    )
+
+    # Since _get_machines_and_sequences_dicts returns symmetrically filtered sequences,
+    # the length of original_sequences[machine] directly corresponds to the number of shared jobs
+    return sum(len(original_sequences[machine]) for machine in machines)
 
 def get_comparison_dataframe(
         previous_schedule: pd.DataFrame, new_schedule: pd.DataFrame,
