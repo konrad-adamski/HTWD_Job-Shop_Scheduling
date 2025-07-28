@@ -209,7 +209,7 @@ if __name__ == "__main__":
     from configs.path_manager import get_path
 
     basic_data_path = get_path("data", "examples")
-    df_schedule = pd.read_csv(basic_data_path / "tardiness_schedule_day_01.csv")
+    df_schedule = pd.read_csv(basic_data_path / "lateness_schedule_day_01.csv")
 
     print("Maschinenbelegungsplan:")
     print(df_schedule.head(5))
