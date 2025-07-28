@@ -31,7 +31,7 @@ def create_jobs_for_shifts(
     # 1) Jobs generieren (mehrere Wiederholungen)
     multiplication = 2 + shift_length // 500
     repetitions = multiplication * shift_count
-    df_jssp = generate_multiple_jobs_from_routings(
+    df_jssp = generate_multiple_jssp_from_routings(
         df_routings=df_routings,
         job_column=job_column,
         routing_column=routing_column,
@@ -88,12 +88,12 @@ def create_jobs_for_shifts(
     
 
 
-def generate_multiple_jobs_from_routings(
+def generate_multiple_jssp_from_routings(
         df_routings: pd.DataFrame, job_column: str = 'Job', routing_column: str = 'Routing_ID',
         operation_column: str = 'Operation', machine_column: str = 'Machine', duration_column: str = 'Processing Time',
                                          repetitions: int = 3, shuffle: bool = False, seed: int = 50) -> pd.DataFrame:
     """
-    Ruft `generate_jobs_from_routings` mehrfach auf und erzeugt eine kombinierte Menge neuer Jobs
+    Ruft `generate_jssp_from_routings` mehrfach auf und erzeugt eine kombinierte Menge neuer Jobs
     mit fortlaufenden Job-IDs.
 
     Parameter:
@@ -112,7 +112,7 @@ def generate_multiple_jobs_from_routings(
         offset = i * routings_per_repetition
         current_seed = seed + i
 
-        df_jobs = generate_jobs_from_routings(
+        df_jobs = generate_jssp_from_routings(
             df_routings,
             job_column=job_column,
             routing_column=routing_column,
@@ -127,7 +127,7 @@ def generate_multiple_jobs_from_routings(
 
     return pd.concat(all_jobs, ignore_index=True)
 
-def generate_jobs_from_routings(
+def generate_jssp_from_routings(
         df_routings: pd.DataFrame, job_column: str = 'Job', routing_column: str = 'Routing_ID',
         operation_column: str = 'Operation', machine_column: str = 'Machine', duration_column: str = 'Processing Time',
         offset: int = 0, shuffle: bool = False, seed: int = 50) -> pd.DataFrame:

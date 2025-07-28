@@ -18,7 +18,7 @@ if __name__ == '__main__':
     lognormal_sigma = 0.25
 
     basic_data_path = get_path("data", "basic")
-    df_routings = pd.read_csv(basic_data_path / "instance.csv")
+    df_routings = pd.read_csv(basic_data_path / "ft10_routings.csv")
 
 
     # --- JSSP and arrivals ---
@@ -50,5 +50,4 @@ if __name__ == '__main__':
     df_jobs_times = add_groupwise_lognormal_deadlines_by_group_mean(df_jobs_times_temp, sigma=lognormal_sigma)
     df_jobs_times_final = ensure_reasonable_deadlines(df_jobs_times, min_coverage = 1.0)
 
-    df_jobs_times_final.to_csv(basic_data_path / f"jobs_times_final.csv", index=False)
-    df_jssp.to_csv(basic_data_path / f"jssp_final.csv", index=False)
+    df_jobs_times_final.to_csv(basic_data_path / f"ft10_jobs_times.csv", index=False)

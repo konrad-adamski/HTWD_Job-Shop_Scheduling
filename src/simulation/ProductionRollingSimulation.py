@@ -230,7 +230,7 @@ if __name__ == "__main__":
 
     print("Simulation:")
     simulation = ProductionSimulation(sigma=0.45)
-    simulation.run(df_schedule, start_time=1440, end_time=2880 - 1)
+    simulation.run(df_schedule, start_time=1440, end_time=2880)
     df_execution = simulation.get_finished_operations_df()
     print("\n", df_execution.head(5))
     print("\n", "---" * 60)
