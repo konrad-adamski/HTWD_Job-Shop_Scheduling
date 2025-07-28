@@ -1,7 +1,7 @@
 import math
 from fractions import Fraction
 from ortools.sat.python import cp_model
-from typing import Dict, Tuple, List, Optional, Literal
+from typing import Dict, Tuple, List, Optional, Literal, Any
 
 from src.solvers.cp.model_builder import build_cp_variables, extract_active_ops_info, \
     add_machine_constraints, compute_job_total_durations, get_last_operation_index, extract_original_start_times, \
@@ -23,7 +23,7 @@ def solve_jssp_lateness_with_deviation_minimization(
         deviation_type: Literal["start", "order_on_machine"] = "start",
         msg: bool = False,
         solver_time_limit: int = 3600, solver_relative_gap_limit: float = 0.0,
-        log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
+        log_file: Optional[str] = None) -> Tuple[List[Tuple[str, int, str, int, int, int]], Dict[str, Any]]:
     """
     Solve a Job-Shop Scheduling Problem (JSSP) using CP-SAT with soft objective terms for lateness,
     deviation from a previous schedule, and early job start penalties.
@@ -72,8 +72,10 @@ def solve_jssp_lateness_with_deviation_minimization(
     :param log_file: Optional path to file for redirecting solver output.
     :type log_file: Optional[str]
 
-    :return: List of scheduled operations as (job, op_id, machine, start, duration, end).
-    :rtype: List[Tuple[str, int, str, int, int, int]]
+    :return: A tuple containing:
+         - List of scheduled operations: (job, op_id, machine, start, duration, end)
+         - Dictionary of experiment log data (solver info, config, model size etc.)
+    :rtype: Tuple[List[Tuple[str, int, str, int, int, int]], Dict[str, Any]]
     """
 
     # 1. === Model initialization and weight preprocessing ===
@@ -208,22 +210,39 @@ def solve_jssp_lateness_with_deviation_minimization(
     model.Add(total_cost == target_scaled_lateness_part + target_scaled_deviation_part)
     model.Minimize(total_cost)
 
-    # 10. === Model-Log summary ===
-    print("Model Information")
-    model_proto = model.Proto()
-    print(f"  Number of variables       : {len(model_proto.variables)}")
-    print(f"  Number of constraints     : {len(model_proto.constraints)}")
-    print(f"  Deviation terms (IntVars) : {len(deviation_terms)}")
-
-    # 11. === Solve and extract solution ===
+    # 10. === Solve and extract solution ===
     schedule, solver_info = solve_cp_model_and_extract_schedule(
         model=model, operations=operations, starts=starts, ends=ends,
         msg=msg, time_limit=solver_time_limit, gap_limit=solver_relative_gap_limit, log_file=log_file)
 
-    print("\nSolver Information:")
-    for key, value in solver_info.items():
-        print(f"  {key.replace('_', ' ').capitalize():25}: {value}")
-    return schedule
+    # 11. === Experiment Logging ===
+    model_proto = model.Proto()
+
+    experiment_log = {
+        "experiment_info": {
+            "total_number_of_operations": len(operations),
+            "number_of_operations_with_previous_schedule": len(original_start),
+            "number_of_active_operation_to_consider": len(active_ops) if active_ops else 0,
+            "schedule_start": schedule_start,
+        },
+        "experiment_config": {
+            "main_pct": float(main_pct),
+            "w_t": w_t,
+            "w_e": w_e,
+            "w_first": w_first,
+            "deviation_type": deviation_type,
+            "solver_time_limit": solver_time_limit,
+            "solver_relative_gap_limit": solver_relative_gap_limit,
+        },
+        "model_info": {
+            "number_of_variables": len(model_proto.variables),
+            "number_of_constraints": len(model_proto.constraints),
+            "number_of_deviation_terms": len(deviation_terms),
+        },
+        "solver_info": solver_info
+    }
+
+    return schedule, experiment_log
 
 # Wrappers ------------------------------------------------------------------------------------------------------------
 
@@ -234,7 +253,7 @@ def solve_jssp_lateness_with_start_deviation_minimization(
         w_t: int = 5, w_e: int = 1, w_first: int = 1, main_pct: float = 0.5,
         duration_buffer_factor: float = 2.0, schedule_start: int = 1440, msg: bool = False,
         solver_time_limit: int = 3600, solver_relative_gap_limit: float = 0.0,
-        log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
+        log_file: Optional[str] = None) -> Tuple[List[Tuple[str, int, str, int, int, int]], Dict[str, Any]]:
     """
     Solves a JSSP minimizing lateness and start-time deviation.
 
@@ -253,7 +272,9 @@ def solve_jssp_lateness_with_start_deviation_minimization(
     :param solver_relative_gap_limit: Allowed MIP gap.
     :param log_file: Optional path to file for redirecting solver output.
 
-    :return: Scheduled operations as (job, op_id, machine, start, duration, end).
+    :return: A tuple of:
+         - List of scheduled operations: (job, op_id, machine, start, duration, end)
+         - Dictionary with experiment log data
     """
     return solve_jssp_lateness_with_deviation_minimization(
         job_ops=job_ops, times_dict=times_dict, previous_schedule=previous_schedule, active_ops=active_ops,
@@ -269,7 +290,7 @@ def solve_jssp_lateness_with_order_deviation_minimization(
         w_t: int = 5, w_e: int = 1, w_first: int = 1, main_pct: float = 0.5,
         duration_buffer_factor: float = 2.0, schedule_start: int = 1440, msg: bool = False,
         solver_time_limit: int = 3600, solver_relative_gap_limit: float = 0.0,
-        log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
+        log_file: Optional[str] = None) -> Tuple[List[Tuple[str, int, str, int, int, int]], Dict[str, Any]]:
     """
     Solves a JSSP minimizing lateness and deviation from original machine order.
 
@@ -288,7 +309,9 @@ def solve_jssp_lateness_with_order_deviation_minimization(
     :param solver_relative_gap_limit: Allowed MIP gap.
     :param log_file: Optional path to file for redirecting solver output.
 
-    :return: Scheduled operations as (job, op_id, machine, start, duration, end).
+    :return: A tuple of:
+         - List of scheduled operations: (job, op_id, machine, start, duration, end)
+         - Dictionary with experiment log data
     """
     return solve_jssp_lateness_with_deviation_minimization(
         job_ops=job_ops, times_dict=times_dict, previous_schedule=previous_schedule, active_ops=active_ops,
@@ -305,7 +328,7 @@ def solve_jssp_tardiness_minimization(
         main_pct: float = 1.0, duration_buffer_factor: float = 2.0, schedule_start: int = 1440,
         deviation_type: Literal["start", "order_on_machine"] = "start", msg: bool = False,
         solver_time_limit: int = 3600, solver_relative_gap_limit: float = 0.0,
-        log_file: Optional[str] = None) -> List[Tuple[str, int, str, int, int, int]]:
+        log_file: Optional[str] = None) -> Tuple[List[Tuple[str, int, str, int, int, int]], Dict[str, Any]]:
     """
     Solves a JSSP minimizing tardiness, optionally with deviation penalties.
 
@@ -322,7 +345,9 @@ def solve_jssp_tardiness_minimization(
     :param solver_relative_gap_limit: Allowed MIP gap.
     :param log_file: Optional path to file for redirecting solver output.
 
-    :return: Scheduled operations as (job, op_id, machine, start, duration, end).
+    :return: A tuple of:
+         - List of scheduled operations: (job, op_id, machine, start, duration, end)
+         - Dictionary with experiment log data
     """
     return solve_jssp_lateness_with_deviation_minimization(
         job_ops=job_ops, times_dict=times_dict, previous_schedule=previous_schedule, active_ops=active_ops,
