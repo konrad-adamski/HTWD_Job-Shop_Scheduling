@@ -38,7 +38,9 @@ def generate_arrivals_from_mean_interarrival_time(job_number: int,
 
 
 
-def calculate_mean_interarrival_time(df, u_b_mmax: float = 0.9, routing_column='Routing_ID', verbose=False) -> float:
+def calculate_mean_interarrival_time(
+        df: pd.DataFrame, u_b_mmax: float = 0.9, routing_column='Routing_ID',
+        machine_column: str = "Machine", duration_column: str = "Processing Time", verbose=False) -> float:
     """
     Berechnet die mittlere Interarrival-Zeit t_a für ein DataFrame,
     sodass die Engpassmaschine mit Auslastung u_b_mmax (< 1.0) betrieben wird.
@@ -55,7 +57,12 @@ def calculate_mean_interarrival_time(df, u_b_mmax: float = 0.9, routing_column='
     n_routings = df[routing_column].nunique()
     p = [1.0 / n_routings] * n_routings
 
-    vec_t_b_mmax = _get_vec_t_b_mmax(df, routing_column=routing_column, verbose=verbose)
+    vec_t_b_mmax = _get_vec_t_b_mmax(
+        df=df,
+        routing_column=routing_column,
+        machine_column=machine_column,
+        duration_column=duration_column,
+        verbose=verbose)
 
     if verbose:
         print(f"Bearbeitungszeiten auf Engpassmaschine: {vec_t_b_mmax}")
@@ -64,7 +71,9 @@ def calculate_mean_interarrival_time(df, u_b_mmax: float = 0.9, routing_column='
     return round(t_a, 2)
 
 
-def _get_vec_t_b_mmax(df, routing_column='Routing_ID', verbose=False):
+def _get_vec_t_b_mmax(
+        df, routing_column: str = 'Routing_ID', machine_column: str = "Machine",
+        duration_column: str = "Processing Time", verbose=False):
     """
     Gibt die Bearbeitungszeit jedes Routings auf der Engpassmaschine zurück,
     in der Reihenfolge des ersten Auftretens in df[routing_column].
@@ -76,13 +85,20 @@ def _get_vec_t_b_mmax(df, routing_column='Routing_ID', verbose=False):
     Rückgabe:
     - Liste der Bearbeitungszeiten auf der Engpassmaschine pro Routing (0, wenn der Routing die Maschine nicht nutzt).
     """
-    eng = _get_engpassmaschine(df, verbose=verbose)
+    eng = _get_engpassmaschine(
+        df=df,
+        machine_column=machine_column,
+        duration_column=duration_column,
+        verbose=verbose
+    )
     routing_order = df[routing_column].unique().tolist()
-    proc_on_eng = df[df['Machine'] == eng].set_index(routing_column)['Processing Time'].to_dict()
+    proc_on_eng = df[df[machine_column] == eng].set_index(routing_column)[duration_column].to_dict()
     return [proc_on_eng.get(routing, 0) for routing in routing_order]
 
 
-def _get_engpassmaschine(df, verbose=False):
+def _get_engpassmaschine(
+        df: pd.DataFrame, machine_column: str = "Machine",
+        duration_column: str = "Processing Time", verbose=False):
     """
     Ermittelt die Maschine mit der höchsten Gesamtbearbeitungszeit (Engpassmaschine).
 
@@ -94,7 +110,7 @@ def _get_engpassmaschine(df, verbose=False):
     Rückgabe:
     - Bezeichnung der Engpassmaschine (gleicher Typ wie in der Spalte 'Machine').
     """
-    usage = df.groupby('Machine')['Processing Time'].sum().to_dict()
+    usage = df.groupby(machine_column)[duration_column].sum().to_dict()
     if verbose:
         print("Maschinenbelastung (Gesamtverarbeitungszeit):")
         for m, total in sorted(usage.items(), key=lambda x: str(x[0])):

@@ -21,17 +21,11 @@ def check_core_schedule_constraints(
     """
     checks_passed = True
 
-    if not is_machine_conflict_free(df_schedule, machine_column, start_column, end_column):
+    if not _is_machine_conflict_free(df_schedule, machine_column, start_column, end_column):
         checks_passed = False
 
-    if not is_job_timing_correct(df_schedule, job_id_column, operation_column, start_column, end_column):
+    if not _is_job_timing_correct(df_schedule, job_id_column, operation_column, start_column, end_column):
         checks_passed = False
-
-    if checks_passed:
-        print("\n+++ All constraints are satisfied.\n")
-    else:
-        print("\n--- Constraint violations detected.\n")
-
     return checks_passed
 
 
@@ -105,7 +99,7 @@ def is_duration_correct(
 
 
 # Machine technological constraints -----------------------------------------------------------------------------------
-def is_machine_conflict_free(
+def _is_machine_conflict_free(
     df_schedule: pd.DataFrame,
     machine_column: str = "Machine",
     start_column: str = "Start",
@@ -145,7 +139,7 @@ def is_machine_conflict_free(
 
 
 # Job technological constraints ---------------------------------------------------------------------------------------
-def is_job_timing_correct(
+def _is_job_timing_correct(
     df_schedule: pd.DataFrame,
     job_id_column: str = "Job",
     operation_column: str = "Operation",
@@ -184,7 +178,7 @@ def is_job_timing_correct(
 
     # Additional check: is the start-based sequence consistent with operation order?
     print("\n> Checking whether the operation sequence by start time matches the technological order:")
-    is_operation_sequence_correct(
+    _is_operation_sequence_correct(
         df_schedule=df_schedule,
         job_id_column=job_id_column,
         operation_column=operation_column,
@@ -194,7 +188,7 @@ def is_job_timing_correct(
     return False
 
 
-def is_operation_sequence_correct(
+def _is_operation_sequence_correct(
     df_schedule: pd.DataFrame, job_id_column: str = "Job", operation_column: str = "Operation",
     start_column: str = "Start") -> bool:
     """

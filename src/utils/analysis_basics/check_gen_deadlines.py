@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 
 
-def empirical_flow_budget_distributions(
+def plotfig_empirical_flow_budget_distributions(
                 df_times: pd.DataFrame, deadline_column = 'Deadline',
                 bins: int = 30, y_max: float = 0.001):
     """

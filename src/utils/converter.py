@@ -1,5 +1,6 @@
 import re
 import pandas as pd
+from typing import Dict, List
 
 
 def exclude_initial_text(content: str, skip_until_marker: int = 1) -> str:
@@ -8,7 +9,7 @@ def exclude_initial_text(content: str, skip_until_marker: int = 1) -> str:
 
     :param content: The full text content.
     :type content: str
-    :param skip_until_marker: Index of the '+++' line after which the text should be kept (default is 1).
+    :param skip_until_marker: Index of the '+++' line after which the text should be kept.
     :type skip_until_marker: int, optional
     :return: The remaining text starting after the specified marker line.
     :rtype: str
@@ -29,7 +30,8 @@ def parse_text_with_instances_to_dict(content: str, verbose: bool = False) -> di
     :type content: str
     :param verbose: If True, enables debug output (optional).
     :type verbose: bool
-    :return: A dictionary where keys are instance descriptions and values are the corresponding matrix blocks (as strings).
+    :return: A dictionary where keys are instance descriptions
+        and values are the corresponding matrix blocks (as strings).
     :rtype: dict
     """
 
@@ -59,53 +61,50 @@ def parse_text_with_instances_to_dict(content: str, verbose: bool = False) -> di
     return instance_dict
 
 
-def structure_dict(raw_dict: dict) -> dict:
-    structured_dict = {}
 
+def structure_dict(raw_dict: Dict[str, str]) -> Dict[str, Dict[int, List[List[int]]]]:
+    """
+    Parses instance strings into {instance → {routing → list of [machine, duration]}} structure.
+    :param raw_dict: Dictionary mapping instance names to whitespace-separated job routing strings.
+    :return: Nested dictionary with instance names, routing indices, and operation lists.
+    """
+    structured_dict = {}
     for instance_name, matrix_text in raw_dict.items():
         lines = matrix_text.strip().splitlines()
         jobs = {}
         for job_id, line in enumerate(lines):
             try:
                 numbers = list(map(int, line.strip().split()))
-                job_ops = [[numbers[i], numbers[i + 1]] for i in range(0, len(numbers), 2)]
-                jobs[job_id] = job_ops
+                jobs[job_id] = [[numbers[i], numbers[i + 1]] for i in range(0, len(numbers), 2)]
             except ValueError:
-                print(f"Skipped invalid line for '{instance_name}': {line}")
                 continue
-
         structured_dict[instance_name] = jobs
     return structured_dict
 
 
-
-def routing_dict_to_df(routings_dict: dict, routing_column: str = 'Routing_ID') -> pd.DataFrame:
+def routing_dict_to_df(
+        routings_dict: dict, routing_column: str = 'Routing_ID', operation_column: str = 'Operation',
+        machine_column: str = "Machine", duration_column: str = "Processing Time",) -> pd.DataFrame:
     """
     Converts a routing dictionary into a pandas DataFrame.
 
-    Parameters
-    ----------
-    routings_dict : dict
-        A dictionary where keys are routing indices (e.g., 0, 1, 2) and values are
-        lists of [machine_index, processing_time] for each operation.
-    routing_column : str, optional
-        Name of the column that will store the routing index (default is 'Routing_ID').
+    :param routings_dict: Dictionary where each key is a routing ID (e.g., 0, 1, 2)
+                          and each value is a list of operations as (machine_index, processing_time).
+    :param routing_column: Name of the column that will store the routing ID.
+    :param operation_column: Name of the column that will store the operation index.
+    :param machine_column: Name of the column that will store the machine name (e.g., ``'M00'``).
+    :param duration_column: Name of the column that will store the processing time.
 
-    Returns
-    -------
-    pd.DataFrame
-        A DataFrame with columns [routing_column, 'Operation', 'Machine', 'Processing Time'].
-        The 'Operation' column represents the position of the operation within the routing sequence.
-        The 'Machine' column is formatted as a string like 'M00', 'M01', etc.
+    :return: DataFrame with one row per operation, including routing ID, operation index, machine, and processing time.
     """
     records = []
     for plan_id, ops in routings_dict.items():
         for op_idx, (machine_idx, proc_time) in enumerate(ops):
             records.append({
                 routing_column: plan_id,
-                'Operation': op_idx,
-                'Machine': f'M{machine_idx:02d}',
-                'Processing Time': proc_time
+                operation_column: op_idx,
+                machine_column: f'M{machine_idx:02d}',
+                duration_column: proc_time
             })
-    df = pd.DataFrame(records, columns=[routing_column, 'Operation', 'Machine', 'Processing Time'])
+    df = pd.DataFrame(records, columns=[routing_column, operation_column, machine_column, duration_column])
     return df
