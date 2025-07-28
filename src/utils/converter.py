@@ -21,7 +21,6 @@ def exclude_initial_text(content: str, skip_until_marker: int = 1) -> str:
     return content[matches[skip_until_marker].end():]
 
 
-
 def parse_text_with_instances_to_dict(content: str, verbose: bool = False) -> dict:
     """
     Parses a structured text with alternating instance names and data blocks into a dictionary.

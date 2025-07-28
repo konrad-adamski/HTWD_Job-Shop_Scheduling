@@ -6,7 +6,9 @@ import pandas as pd
 
 
 class ProductionSimulation:
-    def __init__(self, job_column: str = 'Job', earliest_start_column: str | None = None, verbose=True, sigma=0.2):
+    def __init__(
+            self, shift_length: int = 1440, job_column: str = 'Job',
+            earliest_start_column: str | None = None, verbose=True, sigma: float =0.2):
         self.job_column = job_column
         self.earliest_start_column = earliest_start_column
         self.verbose = verbose
@@ -14,7 +16,8 @@ class ProductionSimulation:
 
         self.machines = {}
         self.start_time = 0
-        self.end_time = None
+        self.shift_length = shift_length
+        self.pause_time = 0
 
         self.active_operations = {} # (job_id, operation) → dict mit Op-Daten
         self.finished_log = {}      # (job_id, operation) → Dict mit Op-Daten
@@ -91,7 +94,7 @@ class ProductionSimulation:
 
     def run(self, dframe_schedule_plan: pd.DataFrame | None  = None , start_time: int = 0, end_time: int | None = None):
         self.start_time = start_time
-        self.end_time = end_time
+        self.pause_time = end_time
         self.env = simpy.Environment(initial_time=start_time)
         self.reload_machines()
         self.finished_log = {}
@@ -112,6 +115,17 @@ class ProductionSimulation:
         else:
             self.env.run()
 
+    def initialize_run(self, dframe_schedule_plan: pd.DataFrame, start_time: int = 0):
+        end_time = start_time + self.shift_length
+        self.run(dframe_schedule_plan=dframe_schedule_plan, start_time=start_time, end_time=end_time)
+
+    def continue_run(self, dframe_schedule_plan: pd.DataFrame):
+        if self.pause_time is None:
+            raise ValueError("Simulation must be initialized before continuing.")
+
+        start_time = self.pause_time
+        end_time = start_time + self.shift_length
+        self.run(dframe_schedule_plan, start_time=start_time, end_time=end_time)
 
     def job_started_on_machine(self, time_stamp, job_id, machine):
         if self.verbose:
@@ -201,7 +215,6 @@ class ProductionSimulation:
         if df.empty:
             return None
         return df.sort_values(by=[self.job_column, "Operation"]).reset_index(drop=True)
-
 
 
 if __name__ == "__main__":
