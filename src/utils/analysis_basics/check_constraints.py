@@ -1,7 +1,110 @@
-import pandas as pd
+from typing import Optional
 
 import pandas as pd
 
+def check_core_schedule_constraints(
+        df_schedule: pd.DataFrame, job_id_column: str = "Job", machine_column: str = "Machine",
+        operation_column: str = "Operation", start_column: str = "Start", end_column: str = "End") -> bool:
+    """
+    Runs a core consistency check on a production schedule.
+
+    This includes verifying that operations assigned to the same machine do not overlap,
+    and that all operations within a job are executed in the correct technological sequence without overlaps.
+
+    :param df_schedule: DataFrame containing the schedule to be validated.
+    :param job_id_column: Column used to group operations by job (default: "Job").
+    :param machine_column: Column indicating the machine/resource (default: "Machine").
+    :param operation_column: Column indicating the operation order/ID (default: "Operation").
+    :param start_column: Column with actual start times (default: "Start").
+    :param end_column: Column with end times (default: "End").
+    :return: True if all checks pass, otherwise False.
+    """
+    checks_passed = True
+
+    if not is_machine_conflict_free(df_schedule, machine_column, start_column, end_column):
+        checks_passed = False
+
+    if not is_job_timing_correct(df_schedule, job_id_column, operation_column, start_column, end_column):
+        checks_passed = False
+
+    if checks_passed:
+        print("\n+++ All constraints are satisfied.\n")
+    else:
+        print("\n--- Constraint violations detected.\n")
+
+    return checks_passed
+
+
+# Check minimal condition: operation starts no earlier than job's possible earliest start -----------------------------
+def is_start_correct(
+        df_schedule: pd.DataFrame, df_times: Optional[pd.DataFrame] = None, id_column: str = "Job",
+        start_column: str = "Start", earliest_start_column: str = "Arrival") -> bool:
+    """
+    Check if all operations start no earlier than the allowed earliest start time.
+
+    If df_times is provided, the earliest start time will be mapped per job from it.
+    Otherwise, df_schedule must already contain the earliest_start_column.
+
+    :param df_schedule: DataFrame with scheduled operations, including start times.
+    :param df_times: Optional DataFrame with the earliest start times per job.
+    :param id_column: Column to match jobs between the DataFrames (default: "Job").
+    :param start_column: Column with actual start times (default: "Start").
+    :param earliest_start_column: Column with the earliest allowed start times (default: "Arrival").
+    :return: True if all starts are valid, otherwise False. If data is missing, the check is skipped with a message.
+    """
+    df = df_schedule.copy()
+
+    if df_times is not None and earliest_start_column in df_times.columns:
+        # Map earliest start times from external DataFrame
+        earliest_start_dict = dict(zip(df_times[id_column], df_times[earliest_start_column]))
+        df["_earliest_start"] = df[id_column].map(earliest_start_dict)
+        earliest_col = "_earliest_start"
+    elif earliest_start_column in df.columns:
+        # Use column from schedule
+        earliest_col = earliest_start_column
+    else:
+        # No data available → skip check
+        print(f"! Earliest start check not possible: column '{earliest_start_column}' not found!")
+        return True  # not treated as violation
+
+    # Perform the check
+    violations = df[df[start_column] < df[earliest_col]]
+
+    if violations.empty:
+        print("+ All operations start at or after the earliest allowed time.")
+        return True
+    else:
+        print(f"- Invalid early starts found ({len(violations)} row(s)):")
+        print(violations[[id_column, start_column, earliest_col]].sort_values(start_column))
+        return False
+
+
+# Check whether operation durations match the difference between start and end times ----------------------------------
+def is_duration_correct(
+        df_schedule: pd.DataFrame, start_column: str = "Start", end_column: str = "End",
+        duration_column: str = "Processing Time") -> bool:
+    """
+    Check whether each operation's duration matches the difference between end and start time.
+
+    :param df_schedule: DataFrame with start, end, and duration columns.
+    :param start_column: Column name for start times (default: "Start").
+    :param end_column: Column name for end times (default: "End").
+    :param duration_column: Column name for durations (default: "Processing Time").
+    :return: True if all durations are correct, otherwise False.
+    """
+    expected_durations = df_schedule[end_column] - df_schedule[start_column]
+    violations = df_schedule[expected_durations != df_schedule[duration_column]]
+
+    if violations.empty:
+        print("+ All durations match the difference between start and end.")
+        return True
+    else:
+        print(f"- Duration mismatch found in {len(violations)} row(s):")
+        print(violations[[start_column, end_column, duration_column]])
+        return False
+
+
+# Machine technological constraints -----------------------------------------------------------------------------------
 def is_machine_conflict_free(
     df_schedule: pd.DataFrame,
     machine_column: str = "Machine",
@@ -41,38 +144,7 @@ def is_machine_conflict_free(
         return True
 
 
-def is_operation_sequence_correct(
-    df_schedule: pd.DataFrame, job_id_column: str = "Job", operation_column: str = "Operation",
-    start_column: str = "Start") -> bool:
-    """
-    Check if the operation sequence by start time matches the expected technological order.
-
-    :param df_schedule: DataFrame with [job_id_column, operation_column, start_column].
-    :param job_id_column: Column used to group operations (default: "Job").
-    :param operation_column: Column indicating operation order (default: "Operation").
-    :param start_column: Column with operation start times (default: "Start").
-    :return: True if all groups follow correct order, else False.
-    """
-    violations = []
-
-    for group_id, grp in df_schedule.groupby(job_id_column):
-        grp_sorted = grp.sort_values(start_column)
-        actual_op_sequence = grp_sorted[operation_column].tolist()
-        expected_sequence = sorted(actual_op_sequence)
-
-        if actual_op_sequence != expected_sequence:
-            violations.append((group_id, actual_op_sequence))
-
-    if not violations:
-        print(f"+ All jobs follow the correct operation sequence.")
-        return True
-    else:
-        print(f"- {len(violations)} job(s) with incorrect order based on {start_column}:")
-        for group_id, seq in violations:
-            print(f"  {job_id_column} {group_id}: Actual order: {seq}")
-        return False
-
-
+# Job technological constraints ---------------------------------------------------------------------------------------
 def is_job_timing_correct(
     df_schedule: pd.DataFrame,
     job_id_column: str = "Job",
@@ -122,74 +194,33 @@ def is_job_timing_correct(
     return False
 
 
-
-def is_start_correct(
-    df_schedule: pd.DataFrame,
-    start_column: str = "Start",
-    earliest_start_column: str = "Arrival"
-) -> bool:
+def is_operation_sequence_correct(
+    df_schedule: pd.DataFrame, job_id_column: str = "Job", operation_column: str = "Operation",
+    start_column: str = "Start") -> bool:
     """
-    Check if all operations start no earlier than their allowed earliest start time.
+    Check if the operation sequence by start time matches the expected technological order.
 
-    :param df_schedule: DataFrame with [start_column, earliest_start_column].
-    :param start_column: Column with actual start times (default: "Start").
-    :param earliest_start_column: Column with earliest allowed start times (default: "Arrival").
-    :return: True if all starts are valid, otherwise False.
+    :param df_schedule: DataFrame with [job_id_column, operation_column, start_column].
+    :param job_id_column: Column used to group operations (default: "Job").
+    :param operation_column: Column indicating operation order (default: "Operation").
+    :param start_column: Column with operation start times (default: "Start").
+    :return: True if all groups follow correct order, else False.
     """
-    violations = df_schedule[df_schedule[start_column] < df_schedule[earliest_start_column]]
+    violations = []
 
-    if violations.empty:
-        print("+ All operations start at or after the earliest allowed time.")
+    for group_id, grp in df_schedule.groupby(job_id_column):
+        grp_sorted = grp.sort_values(start_column)
+        actual_op_sequence = grp_sorted[operation_column].tolist()
+        expected_sequence = sorted(actual_op_sequence)
+
+        if actual_op_sequence != expected_sequence:
+            violations.append((group_id, actual_op_sequence))
+
+    if not violations:
+        print(f"+ All jobs follow the correct operation sequence.")
         return True
     else:
-        print(f"- Invalid early starts found ({len(violations)} row(s)):")
-        print(violations.sort_values(start_column))
+        print(f"- {len(violations)} job(s) with incorrect order based on {start_column}:")
+        for group_id, seq in violations:
+            print(f"  {job_id_column} {group_id}: Actual order: {seq}")
         return False
-
-
-
-def all_in_one(
-        df_schedule: pd.DataFrame, job_id_column: str = "Job", machine_column: str = "Machine",
-        operation_column: str = "Operation",start_column: str = "Start", end_column: str = "End",
-        earliest_start_column: str = "Arrival"
-) -> bool:
-    """
-    Run a complete consistency check on a production schedule.
-
-    This function verifies:
-    - that no overlapping operations are assigned to the same machine
-    - that all job operations follow the defined technological sequence without overlaps
-    - that no operation starts before the allowed earliest start time (e.g. arrival)
-
-    :param df_schedule: DataFrame containing the schedule to be validated.
-    :param job_id_column: Column used to group operations by job (default: "Job").
-    :param machine_column: Column indicating the machine/resource (default: "Machine").
-    :param operation_column: Column indicating the operation order/ID (default: "Operation").
-    :param start_column: Column with actual start times (default: "Start").
-    :param end_column: Column with end times (default: "End").
-    :param earliest_start_column: Column with allowed earliest start times (default: "Arrival").
-    :return: True if all checks pass, otherwise False.
-    """
-    checks_passed = True
-
-    if not is_machine_conflict_free(
-            df_schedule, machine_column=machine_column,
-            start_column=start_column, end_column=end_column):
-        checks_passed = False
-
-    if not is_job_timing_correct(
-            df_schedule, job_id_column=job_id_column, operation_column=operation_column,
-            start_column=start_column, end_column=end_column):
-        checks_passed = False
-
-    if not is_start_correct(
-            df_schedule, start_column=start_column,
-            earliest_start_column=earliest_start_column):
-        checks_passed = False
-
-    if checks_passed:
-        print("\n+++ All constraints are satisfied.\n")
-    else:
-        print("\n--- Constraint violations detected.\n")
-
-    return checks_passed
