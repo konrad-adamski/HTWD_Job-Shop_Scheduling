@@ -7,7 +7,8 @@ from database.db_setup import SessionLocal
 
 def add_routings_and_operations_from_dframe(
         df_routing: pd.DataFrame, instance_name: str, routing_column: str = "Routing_ID",
-        machine_column: str = "Machine", duration_column: str = "Processing Time") -> List[str]:
+        operation_column: str = "Operation", machine_column: str = "Machine",
+        duration_column: str = "Processing Time") -> List[str]:
     """
     Add routings and their operations from a DataFrame for a given instance.
     Existing routings (by ID) will be skipped.
@@ -15,6 +16,7 @@ def add_routings_and_operations_from_dframe(
     :param df_routing: DataFrame with routing and operation data.
     :param instance_name: Target instance name (created if not present).
     :param routing_column: Column name for routing IDs.
+    :param operation_column: Column name for operation numbers.
     :param machine_column: Column name for machine identifiers.
     :param duration_column: Column name for processing durations.
     :return: List of skipped routing IDs (because they already existed).
@@ -44,6 +46,7 @@ def add_routings_and_operations_from_dframe(
             for _, row in df_group.iterrows():
                 op = Operation(
                     routing_id=routing_id_str,
+                    number=int(row[operation_column]),  # jetzt verpflichtend für PrimaryKey
                     machine=str(row[machine_column]).strip(),
                     duration=int(row[duration_column])
                 )

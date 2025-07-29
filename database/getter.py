@@ -46,9 +46,13 @@ def get_jobs_by_instance(
 
 
 def get_jssp_by_job_ids(
-        job_ids: List[str], job_column: str = "Job", routing_column: str = "Routing_ID",
-        operation_column: str = "Operation", machine_column: str = "Machine",
-        duration_column: str = "Processing Time") -> pd.DataFrame:
+    job_ids: List[str],
+    job_column: str = "Job",
+    routing_column: str = "Routing_ID",
+    operation_column: str = "Operation",
+    machine_column: str = "Machine",
+    duration_column: str = "Processing Time"
+) -> pd.DataFrame:
     """
     Retrieve JSSP operation data for a list of job IDs and return as a DataFrame,
     including operation index, machine, and duration.
@@ -76,11 +80,12 @@ def get_jssp_by_job_ids(
             if not routing or not routing.operations:
                 continue
 
-            for op_index, op in enumerate(routing.operations):
+            sorted_ops = sorted(routing.operations, key=lambda routing_op: routing_op.number)
+            for op in sorted_ops:
                 records.append({
                     job_column: job.id,
                     routing_column: routing.id,
-                    operation_column: op_index,
+                    operation_column: op.number,
                     machine_column: op.machine,
                     duration_column: op.duration
                 })

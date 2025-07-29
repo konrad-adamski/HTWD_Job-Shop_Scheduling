@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, String, ForeignKey, PrimaryKeyConstraint
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -22,10 +22,16 @@ class Routing(Base):
 
 class Operation(Base):
     __tablename__ = "operation"
-    id = Column(Integer, primary_key=True, autoincrement=True)
+
     routing_id = Column(String(255), ForeignKey("routing.id"), nullable=False)
+    number = Column(Integer, nullable=False)  # Reihenfolge innerhalb des Routings
     machine = Column(String(255), nullable=False)
     duration = Column(Integer, nullable=False)
+
+    __table_args__ = (
+        PrimaryKeyConstraint('routing_id', 'number', name='pk_routing_operation'),
+    )
+
     routing = relationship("Routing", back_populates="operations")
 
 
