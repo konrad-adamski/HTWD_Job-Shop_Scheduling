@@ -1,8 +1,8 @@
-from typing import List
+from typing import List, Optional
 
 import pandas as pd
 from sqlalchemy import select
-from database.db_models import Job, Routing, Instance
+from database.db_models import Job, Routing, Instance, Schedule
 from database.db_setup import SessionLocal
 
 
@@ -93,3 +93,50 @@ def get_jssp_by_job_ids(
         df = pd.DataFrame(records)
         print(f"✅ Retrieved JSSP data for {len(jobs)} jobs with {len(df)} operations.")
         return df
+
+def get_schedule_dataframe(
+        experiment_id: int, day: int, job_column: str = "Job", operation_column: str = "Operation",
+        machine_column: str = "Machine", start_column: str = "Start", duration_column: str = "Processing Time",
+        end_column: str = "End") -> Optional[pd.DataFrame]:
+    """
+    Returns a schedule for a given experiment and day as a pandas DataFrame
+    with custom column names.
+
+    :param experiment_id: ID of the experiment
+    :param day: Day to filter
+    :param job_column: Output column name for Job ID
+    :param operation_column: Output column name for Operation number
+    :param machine_column: Output column name for machine
+    :param start_column: Output column name for start time
+    :param duration_column: Output column name for duration
+    :param end_column: Output column name for end time
+    :return: DataFrame with renamed schedule fields, or None if no entries found
+    """
+    session = SessionLocal()
+
+    try:
+        results = (
+            session.query(Schedule)
+            .filter_by(experiment_id=experiment_id, day=day)
+            .order_by(Schedule.job_id, Schedule.operation_id)
+            .all()
+        )
+
+        data = [{
+            job_column: schedule_entry.job_id,
+            operation_column: schedule_entry.operation_id,
+            machine_column: schedule_entry.machine,
+            start_column: schedule_entry.start,
+            duration_column: schedule_entry.duration,
+            end_column: schedule_entry.end,
+            } for schedule_entry in results]
+
+        return pd.DataFrame(
+            data, columns=[job_column, operation_column, machine_column, start_column, duration_column, end_column]
+        )
+    except Exception as e:
+        print(f"Error in get_schedule_dataframe: {e}")
+        return None
+
+    finally:
+        session.close()

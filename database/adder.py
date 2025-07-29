@@ -1,7 +1,7 @@
 from typing import List
 import pandas as pd
 from sqlalchemy import select
-from database.db_models import Instance, Routing, Operation, Job
+from database.db_models import Instance, Routing, Operation, Job, Schedule, Experiment
 from database.db_setup import SessionLocal
 
 
@@ -112,3 +112,67 @@ def add_jobs_from_dataframe(
         print(f"⚠️  {len(skipped_jobs)} jobs skipped (routing not found): {skipped_jobs[:5]} ...")
 
     return skipped_jobs
+
+def add_schedule_entries_from_dataframe(
+        df: pd.DataFrame, experiment_id: int, day: int, log: dict | list | None,
+        job_column: str = "Job", operation_column: str = "Operation", machine_column: str = "Machine",
+        start_column: str = "Start", duration_column: str = "Processing Time", end_column: str = "End") -> None:
+    """
+    Adds schedule entries from a DataFrame to the database for a given experiment and day.
+
+    If entries for (experiment_id, day) already exist, or if the experiment doesn't exist,
+    no changes are made and a message is printed instead.
+
+    :param df: DataFrame with schedule data
+    :param experiment_id: ID of the experiment
+    :param day: Day to assign the entries to
+    :param log: Optional log data to store with each entry (same for all)
+    :param job_column: Column name for Job ID
+    :param operation_column: Column name for Operation number
+    :param machine_column: Column name for Machine
+    :param start_column: Column name for Start time
+    :param duration_column: Column name for Duration
+    :param end_column: Column name for End time
+    """
+    session = SessionLocal()
+    try:
+        # 1. Check if experiment exists
+        experiment = session.query(Experiment).get(experiment_id)
+        if experiment is None:
+            print(f"❌ Experiment {experiment_id} not found. Nothing written.")
+            return
+
+        # 2. Check if schedule already exists
+        existing = session.query(Schedule).filter_by(experiment_id=experiment_id, day=day).first()
+        if existing:
+            print(f"⚠️ Schedule already exists for experiment {experiment_id}, day {day}. Nothing written.")
+            return
+
+        # 3. Build schedule entries
+        schedule_entries: List[Schedule] = []
+
+        for _, row in df.iterrows():
+            entry = Schedule(
+                experiment_id=experiment_id,
+                job_id=str(row[job_column]),
+                operation_id=int(row[operation_column]),
+                day=day,
+                machine=str(row[machine_column]),
+                start=int(row[start_column]),
+                duration=int(row[duration_column]),
+                end=int(row[end_column]),
+                log=log
+            )
+            schedule_entries.append(entry)
+
+        # 4. Insert
+        session.add_all(schedule_entries)
+        session.commit()
+        print(f"✅ {len(schedule_entries)} schedule entries added for experiment {experiment_id}, day {day}")
+
+    except Exception as e:
+        session.rollback()
+        print(f"❌ Error while adding schedule entries: {e}")
+
+    finally:
+        session.close()

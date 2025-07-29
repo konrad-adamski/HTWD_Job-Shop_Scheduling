@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, PrimaryKeyConstraint
+from sqlalchemy import Column, Integer, String, ForeignKey, PrimaryKeyConstraint, JSON
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -45,3 +45,44 @@ class Job(Base):
     deadline = Column(Integer, nullable=False)
 
     routing = relationship("Routing", back_populates="jobs")
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+class Experiment(Base):
+    __tablename__ = "experiment"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=True)
+    param_settings = Column(JSON, nullable=False)
+
+
+class Schedule(Base):
+    __tablename__ = "schedule"
+
+    experiment_id = Column(Integer, ForeignKey("experiment.id"), nullable=False)
+    job_id = Column(String(255), ForeignKey("job.id"), nullable=False)
+    operation_id = Column(Integer, nullable=False)     # ← lose Referenz auf operation.number
+    day = Column(Integer, nullable=False)
+
+    start = Column(Integer, nullable=False)
+    duration = Column(Integer, nullable=False)
+    end = Column(Integer, nullable=False)
+    machine = Column(String(255), nullable=False)
+    log = Column(JSON, nullable=True)
+
+    # Beziehungen
+    job = relationship("Job", backref="schedules")
+    experiment = relationship("Experiment", backref="schedules")
+
+    __table_args__ = (
+        PrimaryKeyConstraint("experiment_id", "job_id", "operation_id", "day", name="pk_schedule"),
+    )
+
+    def check_duration(self) -> bool:
+        """
+        Checks whether the duration is consistent with start and end time.
+
+        :return: True if (start + duration == end), otherwise False
+        :rtype: bool
+        """
+        return self.start + self.duration == self.end
