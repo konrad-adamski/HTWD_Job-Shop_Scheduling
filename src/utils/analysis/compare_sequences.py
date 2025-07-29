@@ -204,16 +204,16 @@ def _get_machines_and_sequences_dicts(
     return machines, original_sequences, revised_sequences
 
 
-def _compute_kendall_tau(original_sequence: List[str], revised_sequence: List[str]) -> float:
+def _compute_kendall_tau(original_sequence: List[str], revised_sequence: List[str]) -> Optional[float]:
     """
     Computes Kendall's Tau between two job sequences with identical elements.
 
     :param original_sequence: Reference job sequence.
     :param revised_sequence: Job sequence to compare (same elements, different order).
-    :return: Kendall's Tau correlation coefficient, or None if undefined.
+    :return: Kendall's Tau correlation coefficient rounded to 4 decimals (or 1.0 if undefined).
     """
     if len(original_sequence) != len(revised_sequence) or len(original_sequence) < 2:
-        return None  # Invalid input or too short for Tau
+        return 1.0  # Invalid input or too short for Tau
 
     # Map each job to its rank in the original sequence
     rank_original = {job: i for i, job in enumerate(original_sequence)}
@@ -226,7 +226,8 @@ def _compute_kendall_tau(original_sequence: List[str], revised_sequence: List[st
 
     # Compare the order in revised_sequence against the original using Kendall's Tau
     tau, _ = kendalltau(baseline, rank_revised)
-    return tau
+
+    return round(tau, 4) if tau is not None else 1.0
 
 
 def _compute_levenshtein_distance(original_sequence: List[str], revised_sequence: List[str]) -> int:

@@ -1,5 +1,5 @@
 import collections
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from ortools.sat.python import cp_model
 
 
@@ -124,26 +124,52 @@ def get_last_operation_index(
         last_op_index[job] = max(op_idx, last_op_index.get(job, -1))
     return last_op_index
 
-def extract_original_start_times(
-    previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]],
-    operations: List[Tuple[int, str, int, int, str, int]]
-) -> Dict[Tuple[str, int], int]:
-    """
-    Extracts original start times for each (job, op_id) from a given previous schedule,
-    limited to the operations currently present in the model.
 
-    :param previous_schedule: List of tuples (job, op_id, machine, start, duration, end)
-    :param operations: List of tuples (job_idx, job_name, op_idx, op_id, machine, duration)
-    :return: Dict mapping (job, op_id) → original start time
+def extract_original_start_times(
+        previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]],
+        operations: List[Tuple[int, str, int, int, str, int]]) -> Dict[Tuple[str, int], int]:
     """
-    original_start = {}
+    Extracts original start times from a previous schedule,
+    restricted to operations currently present in the model.
+
+    :param previous_schedule: List of (job, op_id, machine, start, duration, end)
+    :param operations: List of (job_idx, job_name, op_idx, op_id, machine, duration)
+    :return: Dict mapping (job, op_id) to original start time
+    """
+    original_start, _ = extract_original_start_times_and_machine_order(previous_schedule, operations)
+    return original_start
+
+
+def extract_original_start_times_and_machine_order(
+        previous_schedule: Optional[List[Tuple[str, int, str, int, int, int]]],
+        operations: List[Tuple[int, str, int, int, str, int]]
+) -> Tuple[Dict[Tuple[str, int], int], Dict[str, List[Tuple[str, int]]]]:
+    """
+    Extracts original start times and machine-wise operation order from a previous schedule,
+    restricted to operations currently present in the model.
+
+    :param previous_schedule: List of (job, op_id, machine, start, duration, end)
+    :param operations: List of (job_idx, job_name, op_idx, op_id, machine, duration)
+    :return: Tuple containing a dict mapping (job, op_id) to original start time
+             and a dict mapping each machine to a list of (job, op_id) sorted by start time
+    """
+    original_operation_starts = {}
+    original_machine_orders = collections.defaultdict(list)
+
     if previous_schedule:
         valid_keys = {(job, op_id) for _, job, _, op_id, _, _ in operations}
         for job, op_id, machine, start, duration, end in previous_schedule:
             key = (job, op_id)
             if key in valid_keys:
-                original_start[key] = start
-    return original_start
+                original_operation_starts[key] = start
+                original_machine_orders[machine].append((start, job, op_id))
+
+        for m in original_machine_orders:
+            original_machine_orders[m].sort()   # sort by start (first element of tuple)
+            original_machine_orders[m] = [(job, op_id) for _, job, op_id in original_machine_orders[m]]
+
+    return original_operation_starts, original_machine_orders
+
 
 
 def add_machine_constraints(
@@ -178,7 +204,10 @@ def add_machine_constraints(
         model.AddNoOverlap(machine_intervals)
 
 
-def add_order_on_machines_deviation_terms(model, previous_schedule, operations, starts):
+def add_order_on_machines_deviation_terms(
+        model: cp_model.CpModel, original_machine_orders: Dict[str, List[Tuple[str, int]]],
+        operations: List[Tuple[int, str, int, int, str, int]],
+        starts: Dict[Tuple[int, int], cp_model.IntVar]) -> List[Any]:
     """
     Add Boolean deviation terms for order violations on machines based on a previous schedule.
 
@@ -186,37 +215,28 @@ def add_order_on_machines_deviation_terms(model, previous_schedule, operations, 
     If the order is violated in the current schedule (i.e., the later-op starts before the earlier-op),
     a Boolean variable is set to 1 and added to the list of deviation terms.
 
-    :param model: CpModel instance.
-    :param previous_schedule: List of tuples (job, op_id, machine, start, duration, end).
-    :param operations: List of operation identifiers including job_idx, job, op_idx, op_id, machine, duration.
-    :param starts: Dict of start time IntVars indexed by (job_idx, op_idx).
-
-    :return: List of BoolVar terms indicating order violations.
+    :param model: CpModel instance
+    :param original_machine_orders: Dict mapping machine to ordered list of (job, op_id)
+    :param operations: List of (job_idx, job, op_idx, op_id, machine, duration)
+    :param starts: Dict mapping (job_idx, op_idx) to start time variables
+    :return: List of BoolVar terms indicating order violations
     """
-
     deviation_terms = []
 
-    # 1. Extract and sort the original machine order from the previous schedule
-    machine_order = collections.defaultdict(list)
-    for job, op_id, machine, start, _, _ in previous_schedule:
-        machine_order[machine].append((start, job, op_id))
-    for m in machine_order:
-        machine_order[m].sort()  # sort by start time
-
-    # 2. Build lookup from (job, op_id) to (job_idx, op_idx)
-    jobop_to_index = {(job, op_id): (job_idx, op_idx)
+    # Build lookup from (job, op_id) to (job_idx, op_idx)
+    job_op_to_index = {(job, op_id): (job_idx, op_idx)
                       for job_idx, job, op_idx, op_id, _, _ in operations}
 
-    # 3. For each pair (a, b) in machine sequence: if a before b, penalize b before a
-    for m, sequence in machine_order.items():
+    # For each machine sequence, add a violation var if the order is reversed
+    for m, sequence in original_machine_orders.items():
         for i in range(len(sequence)):
             for j in range(i + 1, len(sequence)):
-                _, job_a, op_a = sequence[i]
-                _, job_b, op_b = sequence[j]
+                job_a, op_id_a = sequence[i]
+                job_b, op_id_b = sequence[j]
 
-                if (job_a, op_a) in jobop_to_index and (job_b, op_b) in jobop_to_index:
-                    a_idx = jobop_to_index[(job_a, op_a)]
-                    b_idx = jobop_to_index[(job_b, op_b)]
+                if (job_a, op_id_a) in job_op_to_index and (job_b, op_id_b) in job_op_to_index:
+                    a_idx = job_op_to_index[(job_a, op_id_a)]
+                    b_idx = job_op_to_index[(job_b, op_id_b)]
                     a_start = starts[a_idx]
                     b_start = starts[b_idx]
 

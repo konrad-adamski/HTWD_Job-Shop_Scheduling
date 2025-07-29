@@ -6,25 +6,28 @@ from typing import List, Tuple, Dict, Optional, Any
 from ortools.sat.python import cp_model
 
 def solve_cp_model_and_extract_schedule(
-                model: cp_model.CpModel, operations, starts, ends,
-                msg: bool, time_limit: int, gap_limit: float,
-                log_file: Optional[str] = None) -> Tuple[List[Tuple[str, int, str, int, int, int]], Dict[str, Any]]:
+        model: cp_model.CpModel, operations: List[Tuple[int, str, int, int, str, int]],
+        starts: Dict[Tuple[int, int], cp_model.IntVar], ends: Dict[Tuple[int, int], cp_model.IntVar],
+        msg: bool, time_limit: Optional[int] = None, gap_limit: float = 0.0,
+        log_file: Optional[str] = None) -> Tuple[List[Tuple[str, int, str, int, int, int]], Dict[str, Any]]:
     """
     Solves a CP-SAT model and extracts the schedule if feasible.
 
     :param model: The CP-SAT model to solve.
-    :param operations: Operation tuples with job, operation, machine info.
-    :param starts: Dictionary of start time variables.
-    :param ends: Dictionary of end time variables.
+    :param operations: List of operation metadata tuples:
+                       (job_idx, job_name, op_idx, op_id, machine, duration).
+    :param starts: Mapping from (job_idx, op_idx) to start time variable.
+    :param ends: Mapping from (job_idx, op_idx) to end time variable.
     :param msg: Whether to enable solver log output.
-    :param time_limit: Maximum time for solver (in seconds).
+    :param time_limit: Optional maximum time for solver (in seconds).
     :param gap_limit: Acceptable relative gap limit.
     :param log_file: Optional path to file for redirecting solver output.
     :return: Tuple of (scheduled operations list, solver info dict).
     """
     solver = cp_model.CpSolver()
     solver.parameters.log_search_progress = msg
-    solver.parameters.max_time_in_seconds = time_limit
+    if time_limit is not None:
+        solver.parameters.max_time_in_seconds = time_limit
     solver.parameters.relative_gap_limit = gap_limit
 
     if log_file is not None:

@@ -1,11 +1,12 @@
+import math
+
+from fractions import Fraction
 from ortools.sat.python import cp_model
 from typing import Dict, List, Optional, Tuple, Literal
-import math
-from fractions import Fraction
 
 from src.solvers.cp.model_builder import build_cp_variables, extract_active_ops_info, \
-    add_machine_constraints, get_last_operation_index, extract_original_start_times, \
-    add_order_on_machines_deviation_terms
+    add_machine_constraints, get_last_operation_index, add_order_on_machines_deviation_terms, \
+    extract_original_start_times_and_machine_order
 from src.solvers.cp.model_solver import solve_cp_model_and_extract_schedule
 
 
@@ -89,8 +90,11 @@ def solve_jssp_flowtime_with_deviation_minimization(
     flowtime_terms = []
     deviation_terms = []
 
-    # 5. === Previous schedule: extract start times for deviation penalties ===
-    original_start = extract_original_start_times(previous_schedule, operations)
+    # 5. === Previous schedule: extract start times and orders on machines for deviation penalties ===
+    original_start, original_machine_orders = extract_original_start_times_and_machine_order(
+        previous_schedule,
+        operations
+    )
 
     # 6. === Active operations: block machines and delay jobs ===
     machines_delays, job_ops_delays = extract_active_ops_info(active_ops, schedule_start)
@@ -98,8 +102,8 @@ def solve_jssp_flowtime_with_deviation_minimization(
     # 7. === Machine constraints ===
     add_machine_constraints(model, machines, intervals, machines_delays)
 
-    if deviation_type == "order_on_machine" and previous_schedule:
-        deviation_terms += add_order_on_machines_deviation_terms(model, previous_schedule, operations, starts)
+    if deviation_type == "order_on_machine" and original_machine_orders:
+        deviation_terms += add_order_on_machines_deviation_terms(model, original_machine_orders, operations, starts)
 
     # 8. === Operation-level constraints and cost assignments ===
     for job_idx, job, op_idx, op_id, machine, duration in operations:
