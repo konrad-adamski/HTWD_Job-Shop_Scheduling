@@ -1,5 +1,6 @@
 import pandas as pd
 
+from src.utils.editor import enrich_schedule_dframe
 # Utils
 from src.utils.initialization import jobs_jssp_init as init
 from src.utils.initialization.gen_deadlines import get_temporary_df_times_from_schedule, \
@@ -43,9 +44,10 @@ if __name__ == '__main__':
     simulation = ProductionSimulation(earliest_start_column="Ready Time", sigma=0, verbose=False)
     simulation.run(df_problem, start_time=0, end_time=None)
     df_fcfs_execution = simulation.get_finished_operations_df()
+    df_pseudo_schedule = enrich_schedule_dframe(df_fcfs_execution, df_jobs_arrivals)
 
     # --- Prepare job-level timing summary for routing-based deadline generation ---
-    df_jobs_times_temp = get_temporary_df_times_from_schedule(df_fcfs_execution, df_jssp)
+    df_jobs_times_temp = get_temporary_df_times_from_schedule(df_pseudo_schedule, df_jssp)
 
     df_jobs_times = add_groupwise_lognormal_deadlines_by_group_mean(df_jobs_times_temp, sigma=lognormal_sigma)
     df_jobs_times_final = ensure_reasonable_deadlines(df_jobs_times, min_coverage = 1.0)

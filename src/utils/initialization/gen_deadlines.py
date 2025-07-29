@@ -3,41 +3,38 @@ from typing import Optional
 import pandas as pd
 import numpy as np
 
-def get_temporary_df_times_from_schedule(df_schedule: pd.DataFrame, df_jssp: pd.DataFrame) -> pd.DataFrame:
+def get_temporary_df_times_from_schedule(
+        df_schedule: pd.DataFrame,
+        df_jssp: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     Prepare job-level timing summary for routing-based deadline generation.
 
-    This function extracts for each job its arrival, ready, and end time,as well as its total processing time.
-    It is a temporary step to provide input for deadline generation methods that group jobs by routing.
+    This function extracts for each job its arrival, ready, and end time,
+    as well as its total processing time (optional),
+    to support deadline generation methods that group jobs by routing.
 
-    Especially useful for functions like ``add_groupwise_lognormal_deadlines_by_group_mean``,
-    which require consistent 'Ready Time' and 'End' values for all jobs of the same routing.
-
-    :param df_schedule: Schedule DataFrame with columns: 'Job', 'Operation', 'Routing_ID', 'Arrival',
-        'Ready Time' and 'End'.
-    :type df_schedule: pandas.DataFrame
-
-    :param df_jssp: Job-shop definition with 'Job' and 'Processing Time' columns.
-    :type df_jssp: pandas.DataFrame
-
-    :return:
-        DataFrame with columns: 'Job', 'Routing_ID', 'Arrival', 'Ready Time', 'End', 'Job Processing Time'.
-    :rtype: pandas.DataFrame
+    :param df_schedule: Schedule DataFrame with columns
+        'Job', 'Operation', 'Routing_ID', 'Arrival', 'Ready Time', and 'End'.
+    :param df_jssp: Optional job-shop definition with 'Job' and 'Processing Time' columns.
+        If provided, the total processing time per job is computed and included.
+    :return: DataFrame with columns
+        'Job', 'Routing_ID', 'Arrival', 'Ready Time', 'End'
+        and optionally 'Job Processing Time' if df_jssp is provided.
     """
-
-    # Select the last operation for each job (based on operation index)
+    # Select the last operation for each job
     df_last_ops = df_schedule.sort_values("Operation").groupby("Job").last().reset_index()
+
+    # Base columns from the schedule
     df_jobs_times = df_last_ops[["Job", "Routing_ID", "Arrival", "Ready Time", "End"]]
 
-    # Compute total processing time per job from the original JSSP definition
-    df_proc_time = df_jssp.groupby("Job", as_index=False)["Processing Time"].sum()
-    df_proc_time.rename(columns={"Processing Time": "Job Processing Time"}, inplace=True)
-
-    # Merge timing info with total processing time
-    df_jobs_times = df_jobs_times.merge(df_proc_time, on="Job", how="left")
-    df_jobs_times
+    # Optionally add job-level total processing time
+    if df_jssp is not None:
+        df_proc_time = df_jssp.groupby("Job", as_index=False)["Processing Time"].sum()
+        df_proc_time.rename(columns={"Processing Time": "Job Processing Time"}, inplace=True)
+        df_jobs_times = df_jobs_times.merge(df_proc_time, on="Job", how="left")
 
     return df_jobs_times
+
 
 def add_groupwise_lognormal_deadlines_by_group_mean(
                 df_times_temp: pd.DataFrame, sigma: float = 0.2,

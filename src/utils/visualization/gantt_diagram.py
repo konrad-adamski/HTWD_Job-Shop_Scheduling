@@ -9,10 +9,8 @@ def _get_color(idx):
     """
     Generate a distinct color from the tab20 colormap with index correction
     and layer-based variation to extend the palette.
-
     - Skips index 6 for visual distinction.
     - Adjusts RGB values for every 16-color cycle to create new color shades.
-
     :param idx: Integer index of the item
     :return: Hex color code as string
     """

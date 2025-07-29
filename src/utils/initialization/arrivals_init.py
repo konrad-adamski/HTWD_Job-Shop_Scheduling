@@ -1,119 +1,138 @@
+from typing import Optional, Literal
+
 import pandas as pd
 import numpy as np
 
 
-def generate_arrivals_from_mean_interarrival_time(job_number: int,
-                                                  mean_interarrival_time: float,
-                                                  start_time: float = 0.0,
-                                                  var_type: str = 'Integer',
-                                                  random_seed: int = 122) -> np.ndarray:
+def generate_arrivals_from_mean_interarrival_time(
+        job_number: int, mean_interarrival_time: float,
+        start_time: float = 0.0, var_type: Literal['Integer', 'Float'] = 'Integer',
+        random_seed: Optional[int] = 120) -> np.ndarray:
     """
-    Berechnet eine Liste von Ankunftszeitpunkten auf Basis einer mittleren Zwischenankunftszeit.
+    Generate a list of job arrival times based on a given mean interarrival time.
 
-    Parameter:
-    - job_number: Anzahl der zu erzeugenden Ankünfte
-    - mean_interarrival_time: Erwartungswert der Exponentialverteilung
-    - start_time: Startzeitpunkt für die erste Ankunft
-    - var_type: 'Integer' für ganze Minuten, sonst Fließkommawerte mit 2 Nachkommastellen
-    - random_seed: Seed zur Reproduzierbarkeit
+    Arrival times are drawn from an exponential distribution and accumulated over time.
 
-    Rückgabe:
-    - Numpy-Array der Ankunftszeiten (gerundet je nach var_type)
+    :param job_number: Number of arrivals to generate
+    :param mean_interarrival_time: Expected interarrival time (mean of exponential distribution)
+    :param start_time: Time of the first possible arrival
+    param var_type: 'Integer' for minute-precision timestamps, 'Float' for 2-decimal float values
+    :param random_seed: Optional seed for reproducibility (set to None for nondeterministic behavior)
+    :return: Numpy array of arrival times
     """
-    np.random.seed(random_seed)
+    if random_seed is not None:
+        np.random.seed(random_seed)
 
-    # 1) Exponentiell verteilte Zwischenankunftszeiten
+    # 1) Generate exponentially distributed interarrival times
     interarrival_times = np.random.exponential(scale=mean_interarrival_time, size=job_number)
+    interarrival_times[0] = 0  # first arrival exactly at start_time
 
-    # 2) Kumulative Ankunftszeiten berechnen
+    # 2) Calculate cumulative arrival times
     arrivals = start_time + np.cumsum(interarrival_times)
 
-    # 3) Runden je nach Typ
+    # 3) Round depending on output type
     if var_type == 'Integer':
         arrivals = np.floor(arrivals).astype(int)
-    else:
+    elif var_type == 'Float':
         arrivals = np.round(arrivals, 2)
+    else:
+        raise ValueError(f"Invalid var_type: {var_type}. Must be 'Integer' or 'Float'.")
 
     return arrivals
 
 
-
 def calculate_mean_interarrival_time(
-        df: pd.DataFrame, u_b_mmax: float = 0.9, routing_column='Routing_ID',
-        machine_column: str = "Machine", duration_column: str = "Processing Time", verbose=False) -> float:
+        df_routings: pd.DataFrame, u_b_mmax: float = 0.9, routing_column: str = 'Routing_ID',
+        machine_column: str = "Machine", duration_column: str = "Processing Time", verbose: bool = False) -> float:
     """
-    Berechnet die mittlere Interarrival-Zeit t_a für ein DataFrame,
-    sodass die Engpassmaschine mit Auslastung u_b_mmax (< 1.0) betrieben wird.
+    Calculate the mean interarrival time t_a that results in a target utilization
+    (u_b_mmax < 1.0) of the bottleneck machine.
 
-    Parameter:
-    - df: DataFrame mit Spalten [routing_column, 'Machine', 'Processing Time']
-    - u_b_mmax: Ziel-Auslastung der Engpassmaschine (z.B. 0.9)
-    - routing_column: Name der Spalte, die die Routings eindeutig identifiziert
-    - verbose: Wenn True, wird die Engpassermittlung und der Vektor ausgegeben
-
-    Rückgabe:
-    - t_a: mittlere Interarrival-Zeit, gerundet auf 2 Dezimalstellen
+    :param df_routings: DataFrame containing routing definitions with machine and processing times
+    :param u_b_mmax: Target utilization of the bottleneck machine (e.g., 0.9)
+    :param routing_column: Column identifying distinct routings
+    :param machine_column: Column identifying machines
+    :param duration_column: Column with processing times
+    :param verbose: If True, prints bottleneck machine info and processing time vector
+    :return: Mean interarrival time t_a, rounded to 2 decimal places
     """
-    n_routings = df[routing_column].nunique()
+
+    # 1) Uniform routing probability
+    n_routings = df_routings[routing_column].nunique()
     p = [1.0 / n_routings] * n_routings
 
+    # 2) Get vector of processing times on the bottleneck machine
     vec_t_b_mmax = _get_vec_t_b_mmax(
-        df=df,
+        df_routings=df_routings,
         routing_column=routing_column,
         machine_column=machine_column,
         duration_column=duration_column,
-        verbose=verbose)
+        verbose=verbose
+    )
 
     if verbose:
-        print(f"Bearbeitungszeiten auf Engpassmaschine: {vec_t_b_mmax}")
+        print(f"Processing times on bottleneck machine: {vec_t_b_mmax}")
 
+    # 3) Calculate mean interarrival time using expected processing time and utilization
     t_a = sum(p[i] * vec_t_b_mmax[i] for i in range(n_routings)) / u_b_mmax
     return round(t_a, 2)
 
 
 def _get_vec_t_b_mmax(
-        df, routing_column: str = 'Routing_ID', machine_column: str = "Machine",
-        duration_column: str = "Processing Time", verbose=False):
+        df_routings: pd.DataFrame, routing_column: str = 'Routing_ID',
+        machine_column: str = "Machine",duration_column: str = "Processing Time", verbose=False):
     """
-    Gibt die Bearbeitungszeit jedes Routings auf der Engpassmaschine zurück,
-    in der Reihenfolge des ersten Auftretens in df[routing_column].
+    Return the processing time of each routing on the bottleneck machine.
 
-    Parameter:
-    - df: DataFrame mit Spalten [routing_column, 'Machine', 'Processing Time']
-    - routing_column: Name der Spalte, die den Routing oder Auftrag eindeutig identifiziert.
+    The list is ordered according to the first appearance of routing IDs in the DataFrame.
 
-    Rückgabe:
-    - Liste der Bearbeitungszeiten auf der Engpassmaschine pro Routing (0, wenn der Routing die Maschine nicht nutzt).
+    :param df_routings: DataFrame containing routing, machine, and duration information
+    :param routing_column: Column identifying each routing (template or job structure)
+    :param machine_column: Column identifying the machines
+    :param duration_column: Column containing processing times
+    :param verbose: If True, prints machine usage information
+    :return: List of processing times on the bottleneck machine (0 if not used)
     """
+    # Determine the bottleneck machine
     eng = _get_engpassmaschine(
-        df=df,
+        df_routings=df_routings,
         machine_column=machine_column,
         duration_column=duration_column,
         verbose=verbose
     )
-    routing_order = df[routing_column].unique().tolist()
-    proc_on_eng = df[df[machine_column] == eng].set_index(routing_column)[duration_column].to_dict()
+
+    # Preserve original routing order
+    routing_order = df_routings[routing_column].unique().tolist()
+
+    # Get processing time on the bottleneck machine for each routing
+    proc_on_eng = df_routings[df_routings[machine_column] == eng].set_index(routing_column)[duration_column].to_dict()
+
+    # Return a list of durations in the original routing order, or 0 if not used
     return [proc_on_eng.get(routing, 0) for routing in routing_order]
 
 
 def _get_engpassmaschine(
-        df: pd.DataFrame, machine_column: str = "Machine",
-        duration_column: str = "Processing Time", verbose=False):
+        df_routings: pd.DataFrame,
+        machine_column: str = "Machine",
+        duration_column: str = "Processing Time",
+        verbose=False):
     """
-    Ermittelt die Maschine mit der höchsten Gesamtbearbeitungszeit (Engpassmaschine).
+    Identify the bottleneck machine with the highest total processing time.
 
-    Parameter:
-    - df: DataFrame mit Spalten ['Machine', 'Processing Time']
-          'Machine' kann beliebige Label enthalten (z.B. int, str).
-    - verbose: Wenn True, wird die Maschinenbelastung ausgegeben.
-
-    Rückgabe:
-    - Bezeichnung der Engpassmaschine (gleicher Typ wie in der Spalte 'Machine').
+    :param df_routings: DataFrame containing routing structure with machine and duration info
+    :param machine_column: Column name identifying the machines
+    :param duration_column: Column name for processing time
+    :param verbose: If True, prints total load per machine
+    :return: Label of the bottleneck machine (same type as machine_column)
     """
-    usage = df.groupby(machine_column)[duration_column].sum().to_dict()
+    # Compute total processing time per machine
+    usage = df_routings.groupby(machine_column)[duration_column].sum().to_dict()
+
+    # Optional output for inspection
     if verbose:
-        print("Maschinenbelastung (Gesamtverarbeitungszeit):")
+        print("Machine load (total processing time):")
         for m, total in sorted(usage.items(), key=lambda x: str(x[0])):
             print(f"  {m}: {total}")
-    return max(usage, key=usage.get)
 
+    # Return the machine with the highest total usage
+    return max(usage, key=usage.get)

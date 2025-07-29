@@ -1,14 +1,18 @@
-from src.utils.initialization.arrivals_init import calculate_mean_interarrival_time, generate_arrivals_from_mean_interarrival_time
 import pandas as pd
 import numpy as np
 import random
 
+from typing import Optional
+from src.utils.initialization.arrivals_init import calculate_mean_interarrival_time, \
+    generate_arrivals_from_mean_interarrival_time
+
+
 def create_jobs_for_shifts(
         df_routings: pd.DataFrame, routing_column: str = 'Routing_ID', job_column: str = 'Job',
         operation_column: str = 'Operation', machine_column: str = "Machine", duration_column: str = "Processing Time",
-        arrival_column: str = "Arrival", ready_time_column: str = "Ready Time",
-        shift_count: int = 1, shift_length: int = 1440, u_b_mmax: float = 0.9,
-        shuffle: bool = False, job_seed: int = 50, arrival_seed: int = 120) -> tuple[pd.DataFrame, pd.DataFrame]:
+        arrival_column: str = "Arrival", ready_time_column: str = "Ready Time", shift_count: int = 1,
+        shift_length: int = 1440, u_b_mmax: float = 0.9, shuffle: bool = False, job_seed: int = 50,
+        arrival_seed: Optional[int] = 120) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Generate jobs across multiple shifts with arrival times based on target machine utilization.
 
@@ -26,7 +30,7 @@ def create_jobs_for_shifts(
     :param shift_count: Number of production shifts
     :param shift_length: Length of a shift in minutes
     :param u_b_mmax: Target utilization of the bottleneck machine
-    :param shuffle: Whether to shuffle routing templates in each repetition
+    :param arrival_seed: Optional seed for arrival time generation
     :param job_seed: Random seed for job ID generation
     :param arrival_seed: Random seed for arrival time generation
     :return: Tuple of two DataFrames: (df_jssp with operations, df_arrivals with arrival and ready times)
@@ -86,7 +90,6 @@ def create_jobs_for_shifts(
 
     return df_jssp, df_jobs_arrivals
     
-
 
 def generate_multiple_jssp_from_routings(
         df_routings: pd.DataFrame, job_column: str = 'Job', routing_column: str = 'Routing_ID',
