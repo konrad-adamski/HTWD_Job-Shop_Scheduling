@@ -1,15 +1,21 @@
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-# GANTT Diagramme --------------------------------------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------------------------------------------------------
-
-# Farbskala: tab20 mit Überspringen von Index 6 und Layer-Anpassungen
+# Define base colormap
 tab20 = plt.get_cmap("tab20")
 
 def _get_color(idx):
+    """
+    Generate a distinct color from the tab20 colormap with index correction
+    and layer-based variation to extend the palette.
+
+    - Skips index 6 for visual distinction.
+    - Adjusts RGB values for every 16-color cycle to create new color shades.
+
+    :param idx: Integer index of the item
+    :return: Hex color code as string
+    """
     base_idx = idx % 16
     layer = idx // 16
     # --- Anpassung: überspringe Index 6 ---
@@ -34,14 +40,13 @@ def get_plot(schedules_df: pd.DataFrame,
                duration_column: str = "Processing Time",
                perspective: str = "Job"):
     """
-    Zeichnet ein Gantt-Diagramm aus Sicht von Schedules (Aufträgen) oder Maschinen.
+    Plot a Gantt chart from either a job or machine perspective.
 
-    Parameters:
-    - schedules_df: DataFrame mit den Operationsdaten
-    - title: Titel des Diagramms
-    - job_id_column: Spalte mit Auftrags-ID (nur relevant für "Job"-Perspektive)
-    - duration_column: Spalte mit Bearbeitungszeit
-    - perspective: "Job" (Auftragsperspektive) oder "Machine" (Maschinenperspektive)
+    :param schedules_df: DataFrame containing scheduling data
+    :param title: Title of the chart
+    :param job_id_column: Column name identifying jobs
+    :param duration_column: Column name for operation durations
+    :param perspective: Either "Job" (job-centric view) or "Machine" (machine-centric view)
     """
 
     if perspective not in ["Job", "Machine"]:
@@ -76,7 +81,7 @@ def get_plot(schedules_df: pd.DataFrame,
                     color=color_map[row[color_column]],
                     edgecolor='black')
 
-    # Legende
+    # Create legend
     legend_handles = [mpatches.Patch(color=color_map[item], label=str(item)) for item in color_items]
     legend_columns = (len(color_items) // 35) + 1
     ax.legend(handles=legend_handles,
@@ -89,6 +94,7 @@ def get_plot(schedules_df: pd.DataFrame,
               alignment='left'
               )
 
+    # Axis labels and formatting
     ax.set_yticks(yticks)
     ax.set_yticklabels(groups)
     ax.set_xlabel("Zeit (in Minuten)")
@@ -96,7 +102,7 @@ def get_plot(schedules_df: pd.DataFrame,
     ax.set_title(title)
     ax.grid(True, axis='y', linestyle='--', alpha=0.6)
 
-    # Achsenlimits
+    # Time axis scaling
     max_time = (schedules_df['Start'] + schedules_df[duration_column]).max()
     x_start = int((schedules_df['Start'].min() // 1440) * 1440)
     ax.set_xlim(x_start, max_time + 60)
@@ -105,8 +111,9 @@ def get_plot(schedules_df: pd.DataFrame,
     ax.set_xticks(xticks)
     ax.grid(True, axis='x', linestyle='--', alpha=0.6)
 
+    # Vertical lines every 1440 minutes (e.g. day delimiter)
     for x in range(x_start, int(max_time) + 1440, 1440):
-        ax.axvline(x=x, color='#777777', linestyle='-', linewidth=1.0, alpha=0.6)
+        ax.axvline(x=x, color='#777777', linestyle='-', linewidth=1.0, alpha=0.7)
 
     plt.tight_layout()
     plt.show()

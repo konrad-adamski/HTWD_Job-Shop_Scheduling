@@ -10,25 +10,29 @@ def create_jobs_for_shifts(
         shift_count: int = 1, shift_length: int = 1440, u_b_mmax: float = 0.9,
         shuffle: bool = False, job_seed: int = 50, arrival_seed: int = 120) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Erzeugt Jobs für mehrere Schichten und berechnet die Ankunftszeiten
-    auf Basis einer Zielauslastung.
+    Generate jobs across multiple shifts with arrival times based on target machine utilization.
 
-    Parameter:
-    - df_routings: Vorlage mit [routing_column, 'Operation', 'Machine', 'Processing Time']
-    - job_column: Name der Spalte für Job-IDs
-    - routing_column: Name der Spalte für Routing-IDs
-    - shift_count: Anzahl der Schichten
-    - u_b_mmax: Zielauslastung der Engpassmaschine
-    - shift_length: Dauer einer Schicht in Minuten
-    - shuffle: Ob Routings innerhalb der Wiederholungen gemischt werden sollen
-    - job_seed: Zufallsseed für Job-Generierung
-    - arrival_seed: Zufallsseed für Ankunftszeiten
+    This function expands routing templates into multiple jobs, distributes arrivals
+    to match a utilization target, and assigns ready times aligned to shifts.
 
-    Rückgabe:
-    - df_jssp: Jobs mit Operationen
-    - df_arrivals: Zeitplan mit [job_column, routing_column, Arrival]
+    :param df_routings: Routing template with columns [routing_column, operation_column, machine_column, duration_column]
+    :param routing_column: Column name for routing identifiers
+    :param job_column: Column name for generated job IDs
+    :param operation_column: Column name for operation sequence
+    :param machine_column: Column name for machine assignment
+    :param duration_column: Column name for processing time
+    :param arrival_column: Column name for job arrival times
+    :param ready_time_column: Column name for earliest ready time per job
+    :param shift_count: Number of production shifts
+    :param shift_length: Length of a shift in minutes
+    :param u_b_mmax: Target utilization of the bottleneck machine
+    :param shuffle: Whether to shuffle routing templates in each repetition
+    :param job_seed: Random seed for job ID generation
+    :param arrival_seed: Random seed for arrival time generation
+    :return: Tuple of two DataFrames: (df_jssp with operations, df_arrivals with arrival and ready times)
     """
-    # 1) Jobs generieren (mehrere Wiederholungen)
+
+    # 1) Generate jobs using routing templates
     multiplication = 2 + shift_length // 500
     repetitions = multiplication * shift_count
     df_jssp = generate_multiple_jssp_from_routings(
@@ -42,7 +46,7 @@ def create_jobs_for_shifts(
         shuffle=shuffle, seed=job_seed
     )
 
-    # 2) Mittlere Zwischenankunftszeit bestimmen
+    # 2) Compute mean interarrival time based on bottleneck utilization
     t_a = calculate_mean_interarrival_time(
         df_routings,
         u_b_mmax = u_b_mmax,
@@ -51,7 +55,7 @@ def create_jobs_for_shifts(
         duration_column= duration_column,
     )
 
-    # 3) Ankunftszeiten
+    # 3) Generate randomized arrival times for all jobs
     unique_jobs = df_jssp[[job_column, routing_column]].drop_duplicates()
     job_numb = len(unique_jobs)
     arrivals = generate_arrivals_from_mean_interarrival_time(
@@ -64,20 +68,16 @@ def create_jobs_for_shifts(
     df_jobs_arrivals = unique_jobs.copy()
     df_jobs_arrivals[arrival_column] = arrivals
 
-    # 4) (a) Nur Ankunftszeiten, die im Zeitfenster sind, behalten
+    # 4a) Keep only jobs arriving within the planning window
     time_limit = shift_count * shift_length
     df_jobs_arrivals = df_jobs_arrivals[df_jobs_arrivals[arrival_column] < time_limit].reset_index(drop=True)
 
-    # 4) (b) Dazugehörige Produktionsaufträge behalten
+    # 4b) Keep corresponding jssp only
     valid_ids = set(df_jobs_arrivals[job_column])
     df_jssp = df_jssp[df_jssp[job_column].isin(valid_ids)].reset_index(drop=True)
 
-
-    # 5) Ready Time
-    df_jobs_arrivals[ready_time_column] = np.ceil((df_jobs_arrivals[arrival_column] + 1) / shift_length) * shift_length
-    df_jobs_arrivals[ready_time_column] = df_jobs_arrivals[ready_time_column].astype(int)
-
-    df_jobs_arrivals = _get_df_with_ready_time_by_shift(
+    # 5) Compute ready times aligned to the next full shift
+    df_jobs_arrivals = get_df_with_ready_time_by_shift(
         df_arrivals=df_jobs_arrivals,
         shift_length=shift_length,
         arrival_column=arrival_column,
@@ -93,17 +93,20 @@ def generate_multiple_jssp_from_routings(
         operation_column: str = 'Operation', machine_column: str = 'Machine', duration_column: str = 'Processing Time',
                                          repetitions: int = 3, shuffle: bool = False, seed: int = 50) -> pd.DataFrame:
     """
-    Ruft `generate_jssp_from_routings` mehrfach auf und erzeugt eine kombinierte Menge neuer Jobs
-    mit fortlaufenden Job-IDs.
+    Generate multiple sets of JSSP jobs by repeatedly calling `generate_jssp_from_routings`.
 
-    Parameter:
-    - df_routings: Vorlage mit [routing_column, 'Operation', 'Machine', 'Processing Time']
-    - repetitions: Anzahl der Wiederholungen
-    - shuffle: Ob die Gruppen bei jedem Durchlauf gemischt werden sollen
-    - seed: Basis-Zufallsseed 
+    Each repetition adds a new set of jobs based on the routing templates, using distinct job IDs.
 
-    Rückgabe:
-    - Kombinierter DataFrame mit [job_column, routing_column, 'Operation', 'Machine', 'Processing Time']
+    :param df_routings: DataFrame with routing definitions [routing_column, operation_column, machine_column, duration_column]
+    :param job_column: Name of the job ID column
+    :param routing_column: Name of the routing template ID column
+    :param operation_column: Name of the operation index column
+    :param machine_column: Name of the machine column
+    :param duration_column: Name of the processing time column
+    :param repetitions: Number of times to replicate the routing set
+    :param shuffle: Whether to shuffle routing templates in each repetition
+    :param seed: Base random seed (incremented per repetition)
+    :return: Combined DataFrame with generated jobs
     """
     all_jobs = []
     routings_per_repetition = df_routings[routing_column].nunique()
@@ -132,29 +135,31 @@ def generate_jssp_from_routings(
         operation_column: str = 'Operation', machine_column: str = 'Machine', duration_column: str = 'Processing Time',
         offset: int = 0, shuffle: bool = False, seed: int = 50) -> pd.DataFrame:
     """
-    Erzeugt neue Jobs aus dem gegebenen Routing-Template mit fortlaufenden Job-IDs.
+       Generate new JSSP based on routing templates with sequential job IDs.
 
-    Jeder Job basiert auf einem Arbeitsplan (routing_column).
+       Each job is created by copying a routing template (identified by `routing_column`).
 
-    Parameter:
-    - df_routings: DataFrame mit [routing_column, 'Operation', 'Machine', 'Processing Time']
-    - offset: Startindex für neue Job-IDs (z.B. 0 für erste Job-ID)
-    - shuffle: Ob die Reihenfolge der Routing-Vorlagen gemischt werden soll
-    - seed: Zufalls-Seed für das Mischen
+       :param df_routings: DataFrame with routing definitions [routing_column, operation_column, machine_column, duration_column]
+       :param job_column: Name of the output job ID column
+       :param routing_column: Name of the routing template ID column
+       :param operation_column: Name of the operation index column
+       :param machine_column: Name of the machine column
+       :param duration_column: Name of the processing time column
+       :param offset: Starting number for new job IDs
+       :param shuffle: Whether to shuffle routing templates before assignment
+       :param seed: Random seed for shuffling
+       :return: DataFrame with generated jssp [job_column, routing_column, operation_column, machine_column, duration_column]
+       """
 
-    Rückgabe:
-    - DataFrame mit [job_column, routing_column, 'Operation', 'Machine', 'Processing Time']
-    """
-
-    # 1) Routing-Vorlagen gruppieren
+    # 1) Group routing template
     groups = [grp for _, grp in df_routings.groupby(routing_column, sort=False)]
 
-    # 2) Optional mischen
+    # 2) Optionally shuffle the routing templates
     if shuffle:
         random.seed(seed)
         random.shuffle(groups)
 
-    # 3) Neue Jobs erzeugen
+    # 3) Generate jssp from the routing templates
     new_recs = []
     for i, grp in enumerate(groups):
         job_id = offset + i
@@ -173,7 +178,7 @@ def generate_jssp_from_routings(
 
 # ---------------------------------------------------------------------------------------------------------------------
 
-def _get_df_with_ready_time_by_shift(
+def get_df_with_ready_time_by_shift(
         df_arrivals: pd.DataFrame, shift_length: int = 480, arrival_column: str = "Arrival",
         ready_time_column: str = "Ready Time") -> pd.DataFrame:
     """
